@@ -1,6 +1,11 @@
+import pickle
+
 import pandas as pd
-from julia import Main
 import copy
+
+# from julia import Julia
+# Julia(init_julia=False)
+from juliacall import Main, DictValue, VectorValue
 
 Main.include("./rlpower/power/pm_functions.jl")
 
@@ -27,16 +32,16 @@ class Configuration:
                                           columns=["inactive", "to_bus", "from_bus"])
 
         self.gen_config = pd.DataFrame(0,
-                                          index=[int(v) for v in network["gen"].keys()],
-                                          columns=["bus"])
+                                       index=[int(v) for v in network["gen"].keys()],
+                                       columns=["bus"])
 
         self.load_config = pd.DataFrame(0,
-                                          index=[int(v) for v in network["load"].keys()],
-                                          columns=["bus"])
+                                        index=[int(v) for v in network["load"].keys()],
+                                        columns=["bus"])
 
         self.bus_config = pd.DataFrame(0,
-                                          index=[int(v) for v in network["bus"].keys()],
-                                          columns=["connected"])
+                                       index=[int(v) for v in network["bus"].keys()],
+                                       columns=["connected"])
 
         # Rename index for all three config dataframes.
         self.branch_config.index.name = "branch"
@@ -189,14 +194,14 @@ class ConfigurationManager:
             self.network = Main.make_busbar_network(loaded_network)
 
         # In both cases, store an extra network that is used as reconfigured version of main network.
-        self.configured_network = Main.make_busbar_network(network)
+        self.configured_network = copy.deepcopy(network)
 
         # Load base configuration that will be used later.
         self.configuration = Configuration(self.network, contains_busbars=contains_busbars)
 
         # Store solutions for base network and configured network.
-        self.solution = Main.pm_solve_opf(self.network)
-        self.config_solution = Main.pm_solve_opf(self.configured_network)
+        self.solution = solve_opf(self.network)
+        self.config_solution = solve_opf(self.configured_network)
 
         self.branch_state_length = len(self.get_branch_state("1"))
 
@@ -208,7 +213,7 @@ class ConfigurationManager:
 
         # Get easy parameter and standard branch data.
         parameter_data = pd.to_numeric(pd.Series(self.network["branch"][branch]), errors="coerce").dropna()
-
+        # print(self.config_solution["solution"].keys())
         if branch in self.config_solution["solution"]["branch"].keys():
             _branch_opt_data = self.config_solution["solution"]["branch"][branch]
         else:
@@ -255,7 +260,9 @@ class ConfigurationManager:
         bar_from_bus_data.index = bar_from_bus_data.index.map(lambda k: ("branch_bar_f_bus", k))
 
         if self.contains_busbars:
-            return_df = pd.concat([parameter_data, branch_opt_data, to_bus_data, from_bus_data, bar_branch_opt_data, bar_from_bus_data, bar_to_bus_data])
+            return_df = pd.concat(
+                [parameter_data, branch_opt_data, to_bus_data, from_bus_data, bar_branch_opt_data, bar_from_bus_data,
+                 bar_to_bus_data])
         else:
             return_df = pd.concat([parameter_data, branch_opt_data, to_bus_data, from_bus_data])
 
@@ -282,6 +289,8 @@ class ConfigurationManager:
 
     def reset_configuration(self) -> None:
         self.configuration.reset()
+        self.config_solution = copy.deepcopy(self.solution)
+        self.configured_network = copy.deepcopy(self.network)
 
     def solve_network_configuration(self, binary_configuration: int) -> float:
         self.apply_network_configuration(binary_configuration)
@@ -314,31 +323,33 @@ class ConfigurationManager:
 
             if change.branch_config == "from_bus":
 
-                old_f_bus = self.configured_network["branch"][component_id]["f_bus"]
+                old_f_bus = str(self.get_bus_id(self.configured_network["branch"][component_id]["f_bus"]))
 
                 if change.value == 1:
-                    self.configured_network["branch"][component_id]["f_bus"] = self.get_busbar_id(old_f_bus)
+                    self.configured_network["branch"][component_id]["f_bus"] = int(self.get_busbar_id(old_f_bus))
                 else:
-                    self.configured_network["branch"][component_id]["f_bus"] = self.get_bus_id(old_f_bus)
+                    self.configured_network["branch"][component_id]["f_bus"] = int(old_f_bus)
 
-                self.duplicate_busbar_branches(branch_ids=[component_id],
-                                               branch_dicts=[self.configured_network["branch"][component_id]],
-                                               bus_id=old_f_bus)
+                if self.contains_busbars:
+                    self.duplicate_busbar_branches(branch_ids=[component_id],
+                                                   branch_dicts=[self.configured_network["branch"][component_id]],
+                                                   bus_id=old_f_bus)
 
-            if change.branch_config == "to_bus":
+            elif change.branch_config == "to_bus":
 
-                old_t_bus = self.configured_network["branch"][str(change.id)]["t_bus"]
+                old_t_bus = str(self.get_bus_id(self.configured_network["branch"][component_id]["t_bus"]))
 
                 if change.value == 1:
-                    self.configured_network["branch"][component_id]["t_bus"] = self.get_busbar_id(old_t_bus)
+                    self.configured_network["branch"][component_id]["t_bus"] = int(self.get_busbar_id(old_t_bus))
                 else:
-                    self.configured_network["branch"][component_id]["t_bus"] = self.get_bus_id(old_t_bus)
+                    self.configured_network["branch"][component_id]["t_bus"] = int(old_t_bus)
 
-                self.duplicate_busbar_branches(branch_ids=[component_id],
-                                               branch_dicts=[self.configured_network["branch"][component_id]],
-                                               bus_id=old_t_bus)
+                if self.contains_busbars:
+                    self.duplicate_busbar_branches(branch_ids=[component_id],
+                                                   branch_dicts=[],
+                                                   bus_id=old_t_bus)
 
-            if change.branch_config == "inactive":
+            elif change.branch_config == "inactive":
                 self.configured_network["branch"][component_id]["br_status"] = 1 - change.value
 
         elif change.type == "bus":
@@ -366,7 +377,7 @@ class ConfigurationManager:
         return int(bus_id) + len(self.network["bus"]) // 2
 
     def get_bus_id(self, busbar_id: str) -> int:
-        return int(busbar_id) - len(self.network["bus"]) // 2
+        return (int(busbar_id) - 1) % (len(self.network["bus"]) // 2) + 1
 
     def get_branchbar_id(self, branch_id: str) -> int:
         return int(branch_id) + len(self.network["branch"])
@@ -395,10 +406,31 @@ class ConfigurationManager:
         return keys, values
 
 
+def recursive_dict_cast(network: dict) -> dict:
+    for key, value in network.items():
+        if type(value) is DictValue:
+            network[key] = dict(network[key])
+            recursive_dict_cast(network[key])
+        elif type(value) is VectorValue:
+            network[key] = list(network[key])
+
+    return dict(network)
 
 
-def solve_opf(network):
-    return Main.pm_solve_opf(network)
+def solve_opf(network: dict) -> dict:
+    # with open('network.pickle', 'wb') as handle:
+    #     pickle.dump(network, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+    # Solve powerflow.
+    result = Main.pm_solve_opf(network)
+
+
+    # Results contain jlwrap type objects that encode information about opt feasibility - convert them to string.
+    # for key in result:
+    #     if "jlwrap" in str(type(result[key])):
+    #         result[key] = str(result[key])
+
+    return recursive_dict_cast(result)
 
 
 def load_test_case(path=None):
