@@ -7,7 +7,7 @@ import copy
 # Julia(init_julia=False)
 from juliacall import Main, DictValue, VectorValue
 
-Main.include("./rlpower/power/pm_functions.jl")
+Main.include("./rl_power/power/pm_functions.jl")
 
 
 class ConfigurationDelta:
@@ -298,6 +298,13 @@ class ConfigurationManager:
 
     def solve_branch_configuration(self, binary_configuration: int, branch_id: str) -> float:
         self.apply_branch_configuration(binary_configuration, branch_id)
+        return self.solve_configuration()
+
+    def solve_branch_configurations(self, binary_configurations: list[int], branch_ids: list[str]) -> float:
+
+        for i, binary_configuration in enumerate(binary_configurations):
+            self.apply_branch_configuration(binary_configuration, branch_ids[i])
+
         return self.solve_configuration()
 
     def apply_network_configuration(self, binary_configuration: int) -> None:

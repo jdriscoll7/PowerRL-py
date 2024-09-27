@@ -1,4 +1,4 @@
-from rlpower.power.powermodels_interface import Configuration, load_test_case, ConfigurationManager
+from rl_power.power.powermodels_interface import Configuration, load_test_case, ConfigurationManager
 
 if __name__ == "__main__":
     network = load_test_case()

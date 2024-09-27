@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap, Normalize
 from matplotlib.cm import ScalarMappable
 
-from rlpower.power.powermodels_interface import recursive_dict_cast, ConfigurationManager
+from rl_power.power.powermodels_interface import recursive_dict_cast, ConfigurationManager
 
 
 def _dict_to_multiline_string(input_dict):
@@ -143,10 +143,10 @@ class PMSolutionRenderer:
 
 if __name__ == "__main__":
 
-    from rlpower.power.powermodels_interface import Configuration, load_test_case, ConfigurationManager
+    from rl_power.power.powermodels_interface import Configuration, load_test_case, ConfigurationManager
 
     import pickle
-    from rlpower.power.powermodels_interface import solve_opf
+    from rl_power.power.powermodels_interface import solve_opf
 
     with open('network.pickle', 'rb') as f:
         x = pickle.load(f)

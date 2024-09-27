@@ -10,7 +10,7 @@ def plot_training_curve(absolute_path: str):
     episode_lengths = [inner for data in json_list for inner in data['hist_stats']['episode_lengths']]
     episode_rewards = [inner for data in json_list for inner in data['hist_stats']['episode_reward']]
 
-    plt.subplots(2, 1)
+    plt.subplots(2, 1, sharex=True)
 
     plt.subplot(2, 1, 1)
     plt.plot(episode_lengths)

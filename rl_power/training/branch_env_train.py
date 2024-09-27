@@ -6,11 +6,12 @@ from ray import air
 from ray import tune
 import os
 
-from rlpower.learning.power_env import BranchEnv
-from rlpower.learning.power_eval import run_policy_on_branch_env
-from rlpower.learning.visualization import plot_training_curve
+from rl_power.envs.branch_env import BranchEnv
+from rl_power.training.power_eval import run_policy_on_branch_env
+from rl_power.visualization.visualization import plot_training_curve
 
 if __name__ == '__main__':
+
     ray.init()
 
     env_options = {"path": os.path.abspath("ieee_data/pglib_opf_case30_ieee.m")}
@@ -22,12 +23,12 @@ if __name__ == '__main__':
         .rl_module(
             # Settings identical to old stack.
             model_config_dict={
-                "fcnet_hiddens": [256, 256, 256],
-                "fcnet_activation": "tanh",
-                # "epsilon": [(0, 1.0), (10000, 0.02)],
-                "fcnet_bias_initializer": "zeros_",
-                "post_fcnet_bias_initializer": "zeros_",
-                "post_fcnet_hiddens": [256],
+                "fcnet_hiddens": [256, 256],
+                "fcnet_activation": "relu",
+                # "epsilon": [(0, 1.0), (3000, 0.01)],
+                # "fcnet_bias_initializer": "zeros_",
+                # "post_fcnet_bias_initializer": "zeros_",
+                # "post_fcnet_hiddens": [256],
                 "use_attention": True,
                 "attention_use_n_prev_actions": 5,
                 "attention_use_n_prev_rewards": 5,
@@ -42,11 +43,12 @@ if __name__ == '__main__':
             #     "alpha": 0.6,
             #     "beta": 0.4,
             # },
-            n_step=3,
-            double_q=True,
-            num_atoms=8,
+            n_step=5,
+            double_q=False,
+            num_atoms=1,
             noisy=False,
-            dueling=True,
+            dueling=False,
+            target_network_update_freq=20,
         )
         # .evaluation(
         #     evaluation_interval=1,
@@ -60,20 +62,20 @@ if __name__ == '__main__':
         # )
     )
 
-    directory = os.path.abspath("./training_results")
+    directory = os.path.abspath("./ray_results")
+    tuner = tune.Tuner(DQN,
+                       param_space=config,
+                       run_config=air.RunConfig(stop={"training_iteration": 3},
+                                                name="branch_experiment",
+                                                verbose=1,
+                                                checkpoint_config=air.CheckpointConfig(checkpoint_at_end=True),
+                                                storage_path=directory)
+                       )
+    results = tuner.fit()
 
-    result = tune.run(DQN,
-                      config=config,
-                      stop={"training_iteration": 20},
-                      local_dir=directory,
-                      name="branch_experiment",
-                      verbose=1,
-                      checkpoint_at_end=True)
+    algo = Algorithm.from_checkpoint(results.get_best_result().checkpoint)
 
-    checkpoint = result.get_last_checkpoint(result.get_best_trial())
-    algo = Algorithm.from_checkpoint(checkpoint)
-
-    results_path = result.get_best_trial().path
+    results_path = results.get_best_result().path
     plot_training_curve(results_path)
     plt.show()
     eval_env_options = {"path": os.path.abspath("ieee_data/pglib_opf_case30_ieee.m"), "render": True}

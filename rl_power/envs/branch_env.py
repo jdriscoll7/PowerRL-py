@@ -6,13 +6,13 @@ from gymnasium import spaces
 import networkx as nx
 import random
 
-from rlpower.power.drawing import PMSolutionRenderer
-from rlpower.power.powermodels_interface import Configuration, load_test_case, ConfigurationManager
+from rl_power.power.drawing import PMSolutionRenderer
+from rl_power.power.powermodels_interface import Configuration, load_test_case, ConfigurationManager
 
 
 class BranchEnvBase(gym.Env):
 
-    def __init__(self, render_mode: str = None, path: str = None, network: dict = None):
+    def __init__(self, render_mode: str = None, path: str = None, network: dict = None, groups: list[int] = None):
         assert path is not None or network is not None
 
         if path is not None:
@@ -28,9 +28,13 @@ class BranchEnvBase(gym.Env):
 
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(observation_size,), dtype=float)
 
-        # Four types of configurations for bus-oriented branch configuration.
+        # Four types of configurations for bus-oriented
+        # branch configuration.
         self.action_space = spaces.Discrete(8)
-        self.current_branch = random.choice(list(self.network_manager.network["branch"].keys()))
+
+        self.branches = list(self.network_manager.network["branch"].keys())
+        self.branches.sort(key=lambda x: int(x))
+        self.current_branch = str(self.branches[0])
 
         self.render_mode = render_mode
         if render_mode:
@@ -46,7 +50,7 @@ class BranchEnvBase(gym.Env):
         # Choose the agent's location uniformly at random
         self.network_manager.reset_configuration()
         self.last_cost = self.network_manager.solution["objective"]
-        self.current_branch = str(random.choice(list(self.network_manager.network["branch"].keys())))
+        self.current_branch = str(self.branches[0])
 
         observation = self.get_observation()
         info = self.get_info()
@@ -58,15 +62,13 @@ class BranchEnvBase(gym.Env):
 
     def step(self, action):
 
+        original_cost = self.network_manager.solution["objective"]
         new_cost = self.network_manager.solve_branch_configuration(action, str(self.current_branch))
+
         feasible = "infeasible" not in str(self.network_manager.config_solution['termination_status']).lower()
 
-        terminated = not feasible
-
-        original_cost = self.network_manager.solution["objective"]
-
         # reward = self.last_cost - new_cost if feasible else -self.network_manager.solution["objective"]
-        reward = (self.last_cost - new_cost) / original_cost if feasible else -0.5
+        reward = (self.last_cost - new_cost) / original_cost if feasible else -0.01
         # reward = self.network_manager.solution["objective"]-new_cost if feasible else -self.network_manager.solution["objective"]
 
         self.last_cost = new_cost
@@ -74,7 +76,8 @@ class BranchEnvBase(gym.Env):
         observation = self.get_observation()
         info = self.get_info()
 
-        self.current_branch = str(random.choice(list(self.network_manager.network["branch"].keys())))
+        terminated = (not feasible) or (self.current_branch == str(self.branches[-1]))
+        self.current_branch = str(int(self.current_branch) + 1)
 
         if self.render_mode is True:
             self.renderer.update_frame(self.network_manager)
