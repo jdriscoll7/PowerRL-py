@@ -7,7 +7,27 @@ import copy
 # Julia(init_julia=False)
 from juliacall import Main, DictValue, VectorValue
 
+from rl_power.power.graph_utils import get_adjacent_branches
+
 Main.include("./rl_power/power/pm_functions.jl")
+
+
+def action_binary_map(action: int):
+
+    assert action < 5
+
+    if action == 0:
+        binary_return = "000"
+    elif action == 1:
+        binary_return = "001"
+    elif action == 2:
+        binary_return = "010"
+    elif action == 3:
+        binary_return = "011"
+    elif action == 4:
+        binary_return = "100"
+
+    return binary_return
 
 
 class ConfigurationDelta:
@@ -113,9 +133,9 @@ class Configuration:
 
     def process_branch_binary(self, binary_config: int, branch_id: str):
 
-        assert binary_config < 8
+        assert binary_config < 5
 
-        binary_string = f"{binary_config:0{3}b}"
+        binary_string = action_binary_map(binary_config)
 
         for i, b in enumerate(binary_string):
             config_key = self.branch_config.columns[i]
@@ -213,12 +233,18 @@ class ConfigurationManager:
 
         # Get easy parameter and standard branch data.
         parameter_data = pd.to_numeric(pd.Series(self.network["branch"][branch]), errors="coerce").dropna()
+        parameter_data = parameter_data.drop(["f_bus", "t_bus", "index"])
         # print(self.config_solution["solution"].keys())
-        if branch in self.config_solution["solution"]["branch"].keys():
-            _branch_opt_data = self.config_solution["solution"]["branch"][branch]
+
+        if "branch" in self.config_solution["solution"].keys():
+            if branch in self.config_solution["solution"]["branch"].keys():
+                _branch_opt_data = self.config_solution["solution"]["branch"][branch]
+            else:
+                existing_key = list(self.config_solution["solution"]["branch"].keys())[0]
+                _branch_opt_data = {k: 0 for k, v in self.config_solution["solution"]["branch"][existing_key].items()}
         else:
-            existing_key = list(self.config_solution["solution"]["branch"].keys())[0]
-            _branch_opt_data = {k: 0 for k, v in self.config_solution["solution"]["branch"][existing_key].items()}
+            existing_key = list(self.solution["solution"]["branch"].keys())[0]
+            _branch_opt_data = {k: 0 for k, v in self.solution["solution"]["branch"][existing_key].items()}
 
         to_bus = str(self.configured_network["branch"][branch]["t_bus"])
         from_bus = str(self.configured_network["branch"][branch]["f_bus"])
@@ -237,7 +263,7 @@ class ConfigurationManager:
         # Repeat above for branch bar.
         branch_bar = self.get_branchbar_id(branch_id=branch)
 
-        if branch_bar in self.config_solution["solution"]["branch"].keys():
+        if "branch" in self.config_solution["solution"].keys() and branch_bar in self.config_solution["solution"]["branch"].keys():
             _bar_branch_opt_data = self.config_solution["solution"]["branch"][branch_bar]
         else:
             _bar_branch_opt_data = {k: 0 for k in _branch_opt_data.keys()}
@@ -258,6 +284,15 @@ class ConfigurationManager:
         bar_branch_opt_data.index = bar_branch_opt_data.index.map(lambda k: ("branch_bar", k))
         bar_to_bus_data.index = bar_to_bus_data.index.map(lambda k: ("branch_bar_t_bus", k))
         bar_from_bus_data.index = bar_from_bus_data.index.map(lambda k: ("branch_bar_f_bus", k))
+
+        # Sort dataframes by index - this caused very bad problems.
+        parameter_data = parameter_data.sort_index()
+        branch_opt_data = branch_opt_data.sort_index()
+        to_bus_data = to_bus_data.sort_index()
+        from_bus_data = from_bus_data.sort_index()
+        bar_branch_opt_data = bar_branch_opt_data.sort_index()
+        bar_from_bus_data = bar_from_bus_data.sort_index()
+        bar_to_bus_data = bar_to_bus_data.sort_index()
 
         if self.contains_busbars:
             return_df = pd.concat(
@@ -300,10 +335,10 @@ class ConfigurationManager:
         self.apply_branch_configuration(binary_configuration, branch_id)
         return self.solve_configuration()
 
-    def solve_branch_configurations(self, binary_configurations: list[int], branch_ids: list[str]) -> float:
+    def solve_branch_configurations(self, binary_configurations: dict[str, int]) -> float:
 
-        for i, binary_configuration in enumerate(binary_configurations):
-            self.apply_branch_configuration(binary_configuration, branch_ids[i])
+        for config_key, config in binary_configurations.items():
+            self.apply_branch_configuration(config, config_key)
 
         return self.solve_configuration()
 
@@ -362,7 +397,7 @@ class ConfigurationManager:
         elif change.type == "bus":
 
             busbar_id = str(self.get_busbar_id(component_id))
-            adjacent_branch_ids, adjacent_branch_dicts = self.get_adjacent_branches([component_id, busbar_id])
+            adjacent_branch_ids, adjacent_branch_dicts = get_adjacent_branches(self.network, [component_id, busbar_id])
 
             if change.value == 1:
                 self.duplicate_busbar_branches(adjacent_branch_ids, adjacent_branch_dicts, component_id)
@@ -406,12 +441,6 @@ class ConfigurationManager:
             new_branch_id = str(self.get_branchbar_id(branch_id))
             self.configured_network["branch"][new_branch_id]["br_status"] = 0
 
-    def get_adjacent_branches(self, bus_ids: list[str]) -> (list[str], list[dict]):
-        keys = [k for k, v in self.network["branch"].items() if (v["f_bus"] in bus_ids or v["t_bus"] in bus_ids)]
-        values = [self.network["branch"][k] for k in keys]
-
-        return keys, values
-
 
 def recursive_dict_cast(network: dict) -> dict:
     for key, value in network.items():
@@ -437,7 +466,8 @@ def solve_opf(network: dict) -> dict:
     #     if "jlwrap" in str(type(result[key])):
     #         result[key] = str(result[key])
 
-    return recursive_dict_cast(result)
+    # return recursive_dict_cast(result)
+    return result
 
 
 def load_test_case(path=None):

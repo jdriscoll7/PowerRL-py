@@ -4,6 +4,8 @@ using Ipopt
 using JuMP
 using Printf
 using JSON
+using Logging
+using Memento
 # using Plots
 # using VegaLite
 
@@ -28,12 +30,24 @@ end
 
 function pm_solve_opf(network::Dict)
 #     network = _convert_to_pm_dict_type(network);
-    return solve_opf(network, ACPPowerModel, JuMP.optimizer_with_attributes(Ipopt.Optimizer, "max_iter"=>150, "print_level"=>0), setting = Dict("output" => Dict("duals" => true)));
+    return solve_opf(network, ACPPowerModel, JuMP.optimizer_with_attributes(Ipopt.Optimizer, "max_iter"=>150, "print_level"=>1), setting = Dict("output" => Dict("duals" => true)));
 end
 
 
-function load_test_case(path)
+macro noprint(expr)
+           quote
+               let so = stdout
+                   redirect_stdout(devnull)
+                   res = $(esc(expr))
+                   redirect_stdout(so)
+                   res
+               end
+           end
+       end
 
+
+function load_test_case(path)
+    Memento.config!("emergency")
     network = PowerModels.parse_file(path);
     return network;
 

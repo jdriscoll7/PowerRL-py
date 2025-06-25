@@ -1,36 +1,54 @@
-from ray.rllib.models import ModelCatalog
-from ray.rllib.models.torch.torch_modelv2 import TorchModelV2
 from torch import nn
+import torch.nn.functional as F
 from gymnasium.spaces import Space
 
 
-class BusAttentionModel(TorchModelV2):
-    def __init__(self, obs_space: Space, action_space: Space, num_outputs: int, model_config: dict, name: str,
-                 max_degree: int = 16):
+class BusAttentionCritic(nn.Module):
+    def __init__(self, state_length: int, linear_dim: int = 32, attention_embed_dim: int = 16, device: str = "cpu", n_heads: int = 4):
+        super().__init__()
+        self.device = device
+        self.state_length = state_length
+        self.linear_dim = linear_dim
 
-        super().__init__(obs_space, action_space, num_outputs, model_config, name)
+        self.embedding = nn.Linear(in_features=state_length, out_features=attention_embed_dim, device=self.device)
+        self.attention_layer = nn.MultiheadAttention(embed_dim=attention_embed_dim, num_heads=n_heads, batch_first=True)
 
-        # Store some dimensions to determine layer dimensions later.
-        self.max_degree = max_degree
-        self.observation_shape = obs_space.shape
-        self.branch_config_size = action_space.shape[0]
+        self.head = nn.Sequential(nn.Linear(in_features=attention_embed_dim, out_features=linear_dim, device=self.device),
+                                  nn.ReLU(),
+                                  nn.Linear(in_features=linear_dim, out_features=1, device=self.device))
 
-        # Input embedding layer (add normalization?). Embed raw features for all adjacent branches.
+    def forward(self, x):
+        x = x.sign() * x.abs().pow(1 / 7)
 
-        # Self-attention (replace with transformer?) across all adjacent branches. Add two special input tokens for
-        # special stay/end inputs, as well as padding tokens up to self.max_degree.
+        x = self.embedding(x)
+        x, _ = self.attention_layer(x, x, x)
+        x = self.head(x)
 
-        # Model has 3 output heads: (1) branch selection, (2) next bus selection, (3) branch configuration.
+        return x
 
-        # (1): Linear layer that flattens branch attention outputs, followed by softmax.
 
-        # (2): Linear layer that flattens branch + 2 special token attention outputs, followed by softmax.
+class BusAttentionActor(nn.Module):
+    def __init__(self, state_length: int, linear_dim: int = 32, attention_embed_dim: int = 16, device: str = "cpu", n_heads: int = 4,
+                 n_actions: int = 3):
+        super().__init__()
+        self.device = device
+        self.state_length = state_length
+        self.linear_dim = linear_dim
 
-        # (3): Linear layer along feature dimension to convert to config size.
+        self.embedding = nn.Linear(in_features=state_length, out_features=attention_embed_dim, device=self.device)
+        self.attention_layer = nn.MultiheadAttention(embed_dim=attention_embed_dim, num_heads=n_heads, batch_first=True)
 
-    def forward(self, input_dict, state, seq_lens):
-        pass
+        self.head = nn.Sequential(nn.Linear(in_features=attention_embed_dim, out_features=linear_dim, device=self.device),
+                                  nn.LeakyReLU(negative_slope=0.02),
+                                  nn.Linear(in_features=linear_dim, out_features=n_actions, device=self.device))
 
-    @staticmethod
-    def register():
-        ModelCatalog.register_custom_model("bus_attention_model", BusAttentionModel)
+    def forward(self, x):
+        x = x.sign() * x.abs().pow(1 / 7)
+
+        x = self.embedding(x)
+        x, _ = self.attention_layer(x, x, x)
+        x = self.head(x)
+
+        x = F.softmax(x, dim=-1)
+
+        return x
