@@ -2,6 +2,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+from sklearn.preprocessing import MinMaxScaler
 
 class MLPActor(nn.Module):
     def __init__(self, state_length: int, linear_dim: int = 256, n_actions: int = 8, **kwargs):
@@ -55,10 +56,10 @@ class MLPCritic(nn.Module):
 
 
 class MLPCombinedActor(nn.Module):
-    def __init__(self, state_length: int, n_agents: int, linear_dim: int = 256, n_actions: int = 8, **kwargs):
+    def __init__(self, state_length: int, n_agents: int, linear_dim: int = 256, n_actions: int = 8, device: str = "cpu", **kwargs):
         super().__init__()
         # self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        self.device = "cpu"
+        self.device = device
 
         self.state_length = state_length
         self.linear_dim = linear_dim
@@ -69,8 +70,20 @@ class MLPCombinedActor(nn.Module):
         self.layer_2 = nn.Linear(in_features=linear_dim, out_features=linear_dim, device=self.device)
         self.layer_3 = nn.Linear(in_features=linear_dim, out_features=n_agents*n_actions, device=self.device)
 
+        self.preprocessor = MinMaxScaler(feature_range=(-1, 1))
+
+
     def forward(self, x):
-        x = x.sign() * x.abs().pow(1 / 7)
+        # x = x.sign() * x.abs().pow(1 / 7)
+
+        x_original_shape = x.shape
+        temp_shape = (x.shape[0], -1)
+
+        self.preprocessor.partial_fit(x.view(temp_shape).cpu().numpy())
+        x = self.preprocessor.transform(x.view(temp_shape).cpu())
+
+        x = torch.tensor(x.reshape(x_original_shape), device=self.device, dtype=torch.float)
+
         x = x.flatten()
 
         x = self.layer_1(x)
@@ -85,10 +98,10 @@ class MLPCombinedActor(nn.Module):
 
 
 class MLPCombinedCritic(nn.Module):
-    def __init__(self, state_length: int, n_agents: int, linear_dim: int = 256, n_actions: int = 8, **kwargs):
+    def __init__(self, state_length: int, n_agents: int, linear_dim: int = 256, n_actions: int = 8, device: str = "cpu", **kwargs):
         super().__init__()
         # self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        self.device = "cpu"
+        self.device = device
 
         self.state_length = state_length
         self.linear_dim = linear_dim
@@ -97,10 +110,20 @@ class MLPCombinedCritic(nn.Module):
 
         self.layer_1 = nn.Linear(in_features=state_length*n_agents, out_features=linear_dim, device=self.device)
         self.layer_2 = nn.Linear(in_features=linear_dim, out_features=linear_dim, device=self.device)
-        self.layer_3 = nn.Linear(in_features=linear_dim, out_features=n_agents, device=self.device)
+        self.layer_3 = nn.Linear(in_features=linear_dim, out_features=1, device=self.device)
+        self.preprocessor = MinMaxScaler(feature_range=(-1, 1))
 
     def forward(self, x):
-        x = x.sign() * x.abs().pow(1 / 7)
+        # x = x.sign() * x.abs().pow(1 / 7)
+
+        x_original_shape = x.shape
+        temp_shape = (x.shape[0], -1)
+
+        self.preprocessor.partial_fit(x.view(temp_shape).cpu().numpy())
+        x = self.preprocessor.transform(x.view(temp_shape).cpu())
+
+        x = torch.tensor(x.reshape(x_original_shape), device=self.device, dtype=torch.float)
+
         x = x.flatten()
 
         x = self.layer_1(x)

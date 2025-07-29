@@ -49,6 +49,14 @@ class EdgeAgentBranchEnv(Env):
         self.observation_space = spaces.Dict({b: self.base_obs_space for b in self.agents})
         self.previous_observation = None
 
+        termination_status = str(self.network_manager.solution['termination_status']).lower()
+
+        feasible = ("infeasible" not in termination_status
+                    and "iteration_limit" not in termination_status
+                    and 'numerical' not in termination_status)
+
+        self.last_feasible = feasible
+
         self.render_mode = render_mode
         if render_mode:
             self.renderer = PMSolutionRenderer()
@@ -73,8 +81,7 @@ class EdgeAgentBranchEnv(Env):
         for b in self.agents:
             one_hot_last_action = np.array([1 if self.last_action[b] == i else 0 for i in
                                             range(5)]) if self.last_action is not None else np.zeros(5)
-            running_data = np.array([(self.max_actions - self.n_iterations) / self.max_actions,
-                                     int(self.last_feasible)])
+            running_data = np.array([(self.max_actions - self.n_iterations) / self.max_actions])
             in_bus = self.network_manager.configured_network["branch"][b]["t_bus"]
             out_bus = self.network_manager.configured_network["branch"][b]["f_bus"]
 
@@ -93,7 +100,9 @@ class EdgeAgentBranchEnv(Env):
                 self.network_manager.get_branch_state(str(b)).values,
                 g_feature_vector,
                 # running_data,
+                np.array([int(self.last_feasible)]),
                 one_hot_last_action,
+                np.array([self.last_reward])
             ])
 
         return observations
@@ -104,6 +113,7 @@ class EdgeAgentBranchEnv(Env):
 
         # Choose the agent's location uniformly at random
         self.network_manager.reset_configuration()
+
         self.last_cost = self.network_manager.solution["objective"]
         self.previous_observation = None
         self.last_action = None
@@ -113,7 +123,15 @@ class EdgeAgentBranchEnv(Env):
 
         self.n_iterations = 0
         self.last_reward = 0
-        self.last_feasible = True
+        termination_status = str(self.network_manager.solution['termination_status']).lower()
+
+        feasible = ("infeasible" not in termination_status
+                    and "iteration_limit" not in termination_status
+                    and 'numerical' not in termination_status)
+
+        self.last_feasible = feasible
+        # if not feasible:
+        #     self.n_iterations = self.max_actions + 1
 
         return observation, info
 
@@ -129,13 +147,16 @@ class EdgeAgentBranchEnv(Env):
                     and "iteration_limit" not in termination_status
                     and 'numerical' not in termination_status)
 
+        newly_feasible = not self.last_feasible and feasible
+        newly_infeasible = self.last_feasible and not feasible
+
         self.last_feasible = feasible
 
         if not feasible:
             self.network_manager = saved_nm
 
         # terminated = (self.n_iterations == self.max_actions - 1) or (self.last_action == action) or (not feasible)
-        terminated = (self.n_iterations == self.max_actions - 1) or (self.last_action == action)
+        terminated = (self.n_iterations >= self.max_actions - 1) or (self.last_action == action)
         # terminated = (self.n_iterations == self.max_actions - 1)
 
         # Sparse reward.
@@ -145,19 +166,28 @@ class EdgeAgentBranchEnv(Env):
         #     reward = 0
 
         # Dense reward.
-        scale_factor = 1
-        reward = (self.last_cost - new_cost) / original_cost if feasible else 0
-        reward *= scale_factor
+        # scale_factor = 1
+        # # reward = (self.last_cost - new_cost) / original_cost if feasible else 0
+        # reward = (self.last_cost - new_cost) / original_cost if feasible else 0
+        # reward *= scale_factor
 
         # Binary reward.
-        # if self.last_cost > new_cost + 1e-5 and feasible:
+        if feasible and self.last_cost > (new_cost + 1e-5):
+            reward = 1
+        elif self.last_cost < new_cost or not feasible:
+            reward = -1
+        else:
+            reward = 0
+
+        # ----
+        # Binary reward.
+        # if feasible and (self.last_cost > (new_cost + 1e-5) or newly_feasible):
         #     reward = 1
-        # elif self.last_cost == new_cost:
-        #     reward = 0
-        # # elif self.last_cost < new_cost or not feasible:
-        # #     reward = -1
-        # else:
+        # elif self.last_cost < new_cost or newly_infeasible:
         #     reward = -1
+        # else:
+        #     reward = 0
+
         self.last_improvement = (original_cost - new_cost) / original_cost if feasible else 0
         self.last_improvement *= 100
 
@@ -245,11 +275,11 @@ class EdgeEnvSampler:
         base_env.set_active_agents(self.agent_sampler(base_env))
 
         # Make random modifications.
-        env = self.perturb_power_network(base_env)
+        base_env = self.perturb_power_network(base_env)
 
         self.n_samples += 1
 
-        return env
+        return base_env
 
     def perturb_power_network(self, env):
 

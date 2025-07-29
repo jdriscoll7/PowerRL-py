@@ -13,15 +13,17 @@ import torch.nn.functional as F
 
 
 if __name__ == '__main__':
-    variance = lambda t: 0.01
+    # variance = lambda t: 0.01
+    variance = lambda t: 0.0
     # variance = lambda t: t/50e3
     sampler_options = {"paths": [os.path.abspath("ieee_data/WB5.m"),
                                  os.path.abspath("ieee_data/pglib_opf_case14_ieee.m"),
                                  os.path.abspath("ieee_data/pglib_opf_case30_ieee.m"),
                                  os.path.abspath("ieee_data/pglib_opf_case57_ieee.m")],
                        # "weights": [3, 1, 0.33, 0.11],
-                       # "weights": [1, 0, 0, 0],
                        "weights": [1, 0, 0, 0],
+                       # "weights": [0, 0, 1, 0],
+                       # "weights": [1, 1, 1, 1],
                        "gen_cost_mean_var": [0, variance],
                        "load_mean_var": [0, variance],
                        }
@@ -43,7 +45,7 @@ if __name__ == '__main__':
                                model_linear_dim=256,
                                max_actions=max_actions,
                                n_agents=n_train_agents,
-                               device="cpu",
+                               device="cuda:0",
                                batch_size=1,
                                entropy_coeff=0,
                                lr=1e-4)
@@ -55,7 +57,7 @@ if __name__ == '__main__':
         results = trainer.train(50000)
 
     test_case = "ieee_data/WB5.m"
-    trainer.agent_count_evaluation_sweep(test_case=test_case, min_agents=1, max_agents=3, max_actions=max_actions)
+    trainer.agent_count_evaluation_sweep(test_case=test_case, min_agents=1, max_agents=3, max_actions=max_actions, limit=100)
 
     trainer.plot_history(f"- Trained on {n_train_agents} Agents")
 
@@ -66,7 +68,7 @@ if __name__ == '__main__':
     # trainer.agent_count_evaluation_sweep(test_case=test_case, min_agents=1, max_agents=3)
 
     test_case = "ieee_data/pglib_opf_case57_ieee.m"
-    trainer.agent_count_evaluation_sweep(test_case=test_case, min_agents=1, max_agents=2)
+    trainer.agent_count_evaluation_sweep(test_case=test_case, min_agents=1, max_agents=2, max_actions=max_actions, limit=100)
 
     # trainer.full_evaluation(), n_agents=2)
 

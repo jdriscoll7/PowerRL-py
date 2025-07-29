@@ -14,10 +14,14 @@ from torch import tensor, nn, optim, Tensor
 import torch.nn.functional as F
 from torch.distributions import Categorical
 
+from rl_power.envs.branch_env import BranchEnv
+from rl_power.envs.edge_agent_branch_env import EdgeAgentBranchEnv
 from rl_power.envs.node_agent_branch_env import NodeEnvSampler, SampledNodeEnv, NodeAgentBranchEnv
 from rl_power.envs.rllib_multi_branch_env import RLLibBranchEnv
 from rl_power.envs.sampled_branch_env import SampledBranchEnv
 from rl_power.modules.bus_attention_model import BusAttentionActor, BusAttentionCritic
+from rl_power.power.graph_utils import get_adjacent_branches
+from rl_power.training.memory import Memory
 
 
 class A2CBranchTrainer:
@@ -37,19 +41,9 @@ class A2CBranchTrainer:
         self.n_actions = n_actions
         self.batch_size = batch_size
         self.entropy_coeff = entropy_coeff
-
-        self.episode_return_batch = []
-        self.state_batch = []
-        self.value_batch = []
-        self.next_value_batch = []
-        self.probs_batch = []
-        self.log_probs_batch = []
-        self.td_target_batch = []
-        self.advantage_batch = []
-
-        self.criterion = nn.SmoothL1Loss()
-
         self.env = training_env(env_sampling_config, max_actions=max_actions, n_agents=n_agents)
+
+        self.memory = Memory(capacity=self.batch_size)
 
         # Get the number of state observations
         state, info = self.env.reset()
@@ -80,6 +74,10 @@ class A2CBranchTrainer:
         self.episode_length_history = []
         self.critic_loss_history = []
         self.actor_loss_history = []
+        self.actor_weight_grad_norm_history = []
+        self.actor_weight_norm_history = []
+        self.ppo_update_iterations = 4
+        self.clip_ratio = 0.1
 
     def select_action(self, state: Dict[str, Tensor]):
         self.steps_done += 1
@@ -109,7 +107,7 @@ class A2CBranchTrainer:
             # Initialize the environment and get its state
             state, info = self.env.reset()
 
-            state = self.state_to_tensor(state)
+            state = self.state_to_tensor(state, self.env)
 
             if i_episode % 100 == 0:
                 print(f"Average reward as of episode {i_episode} (last 100 episodes):" + str(
@@ -128,7 +126,7 @@ class A2CBranchTrainer:
                 next_state, reward, terminated, truncated, _ = self.env.step(action_dict)
 
                 # Convert next state from ndarray dict to tensor dict.
-                next_state = self.state_to_tensor(next_state)
+                next_state = self.state_to_tensor(next_state, self.env)
 
                 truncated = terminated
                 state_tensor = torch.cat(list(state.values()), dim=0)
@@ -136,7 +134,7 @@ class A2CBranchTrainer:
 
                 reward_list = [torch.tensor(r, dtype=torch.float32, device=self.device).unsqueeze(0)
                                for branch, r in reward.items()]
-                reward_tensor = torch.tensor(reward_list).mean()
+                reward_tensor = torch.tensor(reward_list, device=self.device).mean()
 
                 if t == 0:
                     episode_return = reward_tensor
@@ -145,30 +143,51 @@ class A2CBranchTrainer:
 
                 value = self.critic(state_tensor)
                 next_value = self.critic(next_state_tensor)
-                # td_target = episode_return + self.discount_rate * next_value.view(-1, 1) * (1 - terminated)
-                td_target = reward_tensor + self.discount_rate * next_value.view(-1, 1) * (1 - terminated)
-                # td_target = (td_target - td_target.mean()) / (td_target.std() + 1e-8)
+                # td_target = reward_tensor + self.discount_rate * next_value.view(-1, 1)
 
-                advantage = td_target - value.view(-1, 1)
+                # if t >= self.max_actions - 1:
+                #     td_target = reward_tensor + self.discount_rate * next_value.view(-1, 1)
+                # else:
+                #     td_target = reward_tensor + self.discount_rate * next_value.view(-1, 1) * (1 - terminated)
+                # # td_target = (td_target - td_target.mean()) / (td_target.std() + 1e-8)
 
                 log_prob_list = []
                 prob_list = []
                 for i, key in enumerate(list(distribution.keys())):
                     log_prob_list.append(distribution[key].log_prob(action_dict[key]))
                     prob_list.append(distribution[key].probs)
-                log_probs = torch.cat(log_prob_list, dim=0)
+                log_probs = torch.sum(torch.cat(log_prob_list, dim=0)).view(1)
                 probs = torch.cat(prob_list, dim=0)
 
-                batch_full = self.update_batch(state_tensor, value, next_value, log_probs, probs, td_target, advantage,
-                                               episode_return)
+                action_tensor = torch.tensor(list(action_dict.values()), device=self.device)
 
-                if batch_full:
-                    self.actor_update()
-                    self.critic_update()
+                self.memory.save(state_tensor, action_tensor, value, next_value,
+                                 log_probs, probs, reward_tensor.view(-1), terminated)
+
+                if terminated and (i_episode + 1) % self.batch_size == 0:
+                    _states, _actions, _values, _next_values, _log_probs, _probs, _advantages, _episode_returns = self.memory.load()
+
+                    # self.critic_update(_values, _episode_returns)
+                    # self.actor_update(_probs, _log_probs, _advantages)
+                    # self.memory.reset()
+                    old_probs = 1 * _probs
+                    for ppo_update_idx in range(self.ppo_update_iterations):
+                        self.critic_update(_values, _episode_returns)
+                        _values = 0*_values.detach()
+                        for _v_i in range(len(_values)):
+                            _values[_v_i] = self.critic(_states[_v_i])
+                        _advantages = (_episode_returns - _values).detach()
+                        self.actor_update(_probs, _log_probs, _advantages, _actions, old_probs)
+                        _probs = 0*_probs.detach()
+                        for _p_i in range(len(_values)):
+                            _probs[_p_i] = self.actor(_states[_p_i]).view(-1, self.n_actions)
+
+                    self.memory.reset()
+
 
                 self.episode_length_history[i_episode] += 1
                 self.reward_history[i_episode] += np.mean(list(reward.values()))
-
+                # print(np.mean(list(reward.values())))
                 done = terminated or truncated
                 state = next_state
                 if done:
@@ -183,57 +202,52 @@ class A2CBranchTrainer:
         torch.save(self.actor.state_dict(), f"{save_directory}a2c_actor_weights_{time_string}.pth")
         torch.save(self.critic.state_dict(), f"{save_directory}a2c_critic_weights_{time_string}.pth")
 
-    def update_batch(self, state, value, next_value, log_probs, probs, td_target, advantage, episode_return) -> bool:
+    def actor_update(self, probs, log_probs, advantages, actions, old_probs=None):
 
-        if len(self.state_batch) == self.batch_size:
-            self.state_batch = []
-            self.value_batch = []
-            self.next_value_batch = []
-            self.log_probs_batch = []
-            self.probs_batch = []
-            self.td_target_batch = []
-            self.advantage_batch = []
-            self.episode_return_batch = []
+        # stacked_probs = torch.cat(self.probs_batch, dim=0)
+        # entropy = torch.sum(stacked_probs * stacked_probs.log(), dim=-1).mean()
+        # entropy = torch.sum(probs * probs.log(), dim=-1).mean()
+        # entropy = torch.nan_to_num(entropy, posinf=0, neginf=0)
 
-        self.state_batch.append(state)
-        self.value_batch.append(value)
-        self.next_value_batch.append(next_value)
-        self.log_probs_batch.append(log_probs)
-        self.probs_batch.append(probs)
-        self.td_target_batch.append(td_target)
-        self.advantage_batch.append(advantage)
-        self.episode_return_batch.append(episode_return)
+        # adv_loss = torch.mean(-log_probs * advantages)
+        # adv_loss = torch.mean(-log_probs.view(-1, 1) * advantages.view(-1, 1))
 
-        return len(self.state_batch) == self.batch_size
+        # actor_loss = adv_loss + self.entropy_coeff * entropy
+        m1 = Categorical(probs)
+        logprobs = m1.log_prob(actions).sum(dim=1).view(-1, 1)
+        m2 = Categorical(old_probs)
+        old_logprobs = m2.log_prob(actions).sum(dim=1).view(-1, 1)
 
-    def actor_update(self):
+        ratios = torch.exp(logprobs - old_logprobs.detach())
+        surr1 = ratios * advantages.view(-1, 1)
+        surr2 = torch.clamp(ratios, 1-self.clip_ratio, 1+self.clip_ratio) * advantages.view(-1, 1)
+        # final loss of clipped objective PPO
+        actor_loss = -torch.min(surr1, surr2).mean()
 
-        stacked_probs = torch.cat(self.probs_batch, dim=0)
-        entropy = torch.sum(stacked_probs * stacked_probs.log(), dim=-1).mean()
-
-        adv_loss = torch.mean(
-            torch.stack([torch.mean(-log_probs.view(-1, 1) * self.advantage_batch[i].view(-1, 1).detach())
-                         for i, log_probs in enumerate(self.log_probs_batch)]))
-
-        actor_loss = adv_loss + self.entropy_coeff * entropy
         self.actor_loss_history.append(actor_loss.item())
         self.actor_optimizer.zero_grad()
-        actor_loss.backward(retain_graph=True)
+        actor_loss.backward()
+        self.actor_weight_grad_norm_history.append(torch.norm(self.actor.layer_1.weight.grad))
+        self.actor_weight_norm_history.append(torch.norm(self.actor.layer_1.weight))
         torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 1)
         self.actor_optimizer.step()
 
-    def critic_update(self):
+    def critic_update(self, values, target):
 
         # Critic update with MSE loss
-        critic_loss = torch.mean(torch.stack([F.mse_loss(value.view(-1), self.td_target_batch[i].view(-1))
-                                              for i, value in enumerate(self.value_batch)]))
+        # critic_loss = torch.mean(torch.stack([F.mse_loss(value.view(-1), self.td_target_batch[i].view(-1))
+        #                                       for i, value in enumerate(self.value_batch)]))
         # critic_loss = torch.mean(torch.stack([torch.mean(adv).pow(2) for adv in self.advantage_batch]))
         # critic_loss = torch.mean(torch.stack([torch.mean(v - self.episode_return_batch[i]).pow(2)
         #                                       for i, v in enumerate(self.value_batch)]))
 
+        # F.mse_loss(self.value_batch, self.td_target_batch)
+        diff = values.view(target.shape[0], -1) - target.view(-1, 1)
+        critic_loss = (diff * diff).mean()
+
         self.critic_loss_history.append(critic_loss.item())
         self.critic_optimizer.zero_grad()
-        critic_loss.backward(retain_graph=True)
+        critic_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 1)
         self.critic_optimizer.step()
 
@@ -249,7 +263,7 @@ class A2CBranchTrainer:
 
         terminated = False
         while not terminated:
-            state = self.state_to_tensor(state)
+            state = self.state_to_tensor(state, test_env)
 
             distribution, action_dict = self.select_action(state)
             state, reward, terminated, truncated, _ = test_env.step(action_dict)
@@ -257,22 +271,30 @@ class A2CBranchTrainer:
             terminated = terminated["__all__"]
 
     def full_evaluation(self, path: str, n_agents: int = 3, max_actions: int = 5, limit: int = None,
-                        plot: bool = False):
+                        plot: bool = False, edges_per_agent: int = 3):
 
         trial_rewards = []
-        test_env = NodeAgentBranchEnv(path=path, max_actions=max_actions, n_agents=n_agents, )
+        test_env = EdgeAgentBranchEnv(path=path, max_actions=max_actions, n_agents=n_agents, agents=["1"])
 
         counter = 0
 
         n_buses = len(list(test_env.network_manager.network["bus"].keys()))
-        for active_node_list in itertools.combinations([str(b + 1) for b in range(n_buses // 2)], n_agents):
+
+        adj_dict = {n: get_adjacent_branches(test_env.network_manager.network, bus_ids=[str(n + 1)])[0]
+                    for n in range(n_buses // 2)}
+
+        nodes_with_enough_edges = [b for b in adj_dict.keys() if len(adj_dict[b]) >= edges_per_agent]
+
+        for active_node_list in itertools.permutations(nodes_with_enough_edges, 1):
+
+            active_branches = np.random.choice(adj_dict[active_node_list[0]], size=edges_per_agent, replace=False)
 
             if limit is not None:
                 counter += 1
                 if counter >= limit:
                     break
 
-            test_env.agents = active_node_list
+            test_env.set_active_agents(list(active_branches))
             state, info = test_env.reset()
 
             # state = test_env.get_observation()
@@ -281,7 +303,7 @@ class A2CBranchTrainer:
             trial_rewards.append(0)
 
             while not terminated:
-                state = self.state_to_tensor(state)
+                state = self.state_to_tensor(state, test_env)
 
                 dist, action_dict = self.select_action(state)
                 state, reward, terminated, truncated, _ = test_env.step(action_dict)
@@ -300,7 +322,7 @@ class A2CBranchTrainer:
         return trial_rewards
 
     def agent_count_evaluation_sweep(self, test_case: str, min_agents: int = 1, max_agents: int = 5,
-                                     max_actions: int = 5):
+                                     max_actions: int = 5, limit:int = 100):
 
         plt_save_info = self.get_plot_string_info()
 
@@ -315,7 +337,7 @@ class A2CBranchTrainer:
 
         for i, agent_count in enumerate(list(range(min_agents, max_n_agent + 1))):
             r = self.full_evaluation(os.path.abspath(test_case), n_agents=agent_count, plot=False,
-                                     max_actions=max_actions)
+                                     max_actions=max_actions, limit=limit)
             mean_val = np.mean(r)
 
             # Histogram plot.
@@ -364,7 +386,7 @@ class A2CBranchTrainer:
 
     def load_latest_model(self):
 
-        path = f"./pytorch_models/{self.critic.__class__.__name__}/"
+        path = f"./pytorch_models/{self.actor.__class__.__name__}/"
 
         files = os.listdir(path)
         actor_paths = [os.path.join(path, basename) for basename in files if "actor" in basename]
@@ -375,14 +397,14 @@ class A2CBranchTrainer:
         self.actor.load_state_dict(torch.load(latest_actor_model, weights_only=True))
         self.critic.load_state_dict(torch.load(latest_critic_model, weights_only=True))
 
-    def state_to_tensor(self, state: dict[str, Union[dict, np.ndarray]]):
+    def state_to_tensor(self, state: dict[str, Union[dict, np.ndarray]], env):
 
-        if isinstance(self.env, SampledNodeEnv):
-            state = {agent: torch.tensor(list(obs.values()), dtype=torch.float32, device=self.device)
-                     for agent, obs in state.items()}
+        if isinstance(env, SampledNodeEnv):
+            state = {agent: torch.tensor(list(state[agent]), dtype=torch.float32, device=self.device)
+                     for agent in env.agents}
         else:
-            state = {agent: torch.tensor([obs], dtype=torch.float32, device=self.device)
-                     for agent, obs in state.items()}
+            state = {agent: torch.tensor([state[agent]], dtype=torch.float32, device=self.device)
+                     for agent in env.agents}
 
         return state
 
@@ -424,7 +446,7 @@ if __name__ == '__main__':
                                model_attn_dim=512,
                                max_actions=max_actions,
                                n_agents=5,
-                               device="cpu",
+                               device="cuda:0",
                                batch_size=64,
                                entropy_coeff=0.01)
 

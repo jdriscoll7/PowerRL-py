@@ -318,6 +318,10 @@ class ConfigurationManager:
     def get_configured_cost(self) -> float:
         return self.config_solution["objective"]
 
+    def solve_base_configuration(self) -> float:
+        self.solution = solve_opf(self.network)
+        return self.solution["objective"]
+
     def solve_configuration(self) -> float:
         self.config_solution = solve_opf(self.configured_network)
         return self.config_solution["objective"]
