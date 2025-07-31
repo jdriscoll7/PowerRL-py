@@ -136,10 +136,10 @@ class A2CBranchTrainer:
                                for branch, r in reward.items()]
                 reward_tensor = torch.tensor(reward_list, device=self.device).mean()
 
-                if t == 0:
-                    episode_return = reward_tensor
-                else:
-                    episode_return += self.discount_rate * reward_tensor
+                # if t == 0:
+                #     episode_return = reward_tensor
+                # else:
+                #     episode_return += self.discount_rate * reward_tensor
 
                 value = self.critic(state_tensor)
                 next_value = self.critic(next_state_tensor)

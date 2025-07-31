@@ -21,9 +21,9 @@ if __name__ == '__main__':
                                  os.path.abspath("ieee_data/pglib_opf_case30_ieee.m"),
                                  os.path.abspath("ieee_data/pglib_opf_case57_ieee.m")],
                        # "weights": [3, 1, 0.33, 0.11],
-                       "weights": [1, 0, 0, 0],
                        # "weights": [0, 0, 1, 0],
-                       # "weights": [1, 1, 1, 1],
+                       # "weights": [0, 0, 1, 0],
+                       "weights": [0, 0, 1, 0],
                        "gen_cost_mean_var": [0, variance],
                        "load_mean_var": [0, variance],
                        }
@@ -46,9 +46,9 @@ if __name__ == '__main__':
                                max_actions=max_actions,
                                n_agents=n_train_agents,
                                device="cuda:0",
-                               batch_size=1,
+                               batch_size=128,
                                entropy_coeff=0,
-                               lr=1e-4)
+                               lr=1e-3)
 
     if load_from_memory:
         trainer.load_latest_model()

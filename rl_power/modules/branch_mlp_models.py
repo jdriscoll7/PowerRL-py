@@ -76,13 +76,15 @@ class MLPCombinedActor(nn.Module):
     def forward(self, x):
         # x = x.sign() * x.abs().pow(1 / 7)
 
-        x_original_shape = x.shape
-        temp_shape = (x.shape[0], -1)
+        # x_original_shape = x.shape
+        # temp_shape = (x.shape[0], -1)
+        #
+        # self.preprocessor.partial_fit(x.view(temp_shape).cpu().numpy())
+        # x = self.preprocessor.transform(x.view(temp_shape).cpu())
+        #
+        # x = torch.tensor(x.reshape(x_original_shape), device=self.device, dtype=torch.float)
 
-        self.preprocessor.partial_fit(x.view(temp_shape).cpu().numpy())
-        x = self.preprocessor.transform(x.view(temp_shape).cpu())
-
-        x = torch.tensor(x.reshape(x_original_shape), device=self.device, dtype=torch.float)
+        x = torch.sign(x) * torch.log(torch.abs(x) + 1)
 
         x = x.flatten()
 
@@ -116,14 +118,15 @@ class MLPCombinedCritic(nn.Module):
     def forward(self, x):
         # x = x.sign() * x.abs().pow(1 / 7)
 
-        x_original_shape = x.shape
-        temp_shape = (x.shape[0], -1)
+        # x_original_shape = x.shape
+        # temp_shape = (x.shape[0], -1)
+        #
+        # self.preprocessor.partial_fit(x.view(temp_shape).cpu().numpy())
+        # x = self.preprocessor.transform(x.view(temp_shape).cpu())
+        #
+        # x = torch.tensor(x.reshape(x_original_shape), device=self.device, dtype=torch.float)
 
-        self.preprocessor.partial_fit(x.view(temp_shape).cpu().numpy())
-        x = self.preprocessor.transform(x.view(temp_shape).cpu())
-
-        x = torch.tensor(x.reshape(x_original_shape), device=self.device, dtype=torch.float)
-
+        x = torch.sign(x) * torch.log(torch.abs(x) + 1)
         x = x.flatten()
 
         x = self.layer_1(x)

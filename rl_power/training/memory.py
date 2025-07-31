@@ -41,7 +41,7 @@ class Memory:
         log_probs = torch.cat(self.log_probs_batch)
         probs = torch.stack(self.probs_batch)
         episode_reward = torch.cat(self.episode_reward_batch)
-        episode_reward = (episode_reward - episode_reward.mean())/(episode_reward.std() + 1e-8)
+        # episode_reward = (episode_reward - episode_reward.mean())/(episode_reward.std() + 1e-8)
         advantage = episode_reward.view((-1, 1)) - values.view((episode_reward.shape[0], -1)).detach()
 
         return states, actions, values, next_values, log_probs, probs, advantage, episode_reward
