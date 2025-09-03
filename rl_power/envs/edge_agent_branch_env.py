@@ -27,6 +27,7 @@ class EdgeAgentBranchEnv(Env):
         self.n_agents = n_agents
 
         assert path is not None or network is not None
+
         if path is not None:
             self.network_manager = ConfigurationManager(load_test_case(path))
         else:
@@ -41,6 +42,7 @@ class EdgeAgentBranchEnv(Env):
         self.agents = agents
         self.last_cost = self.network_manager.solution["objective"]
         self.branches = list(self.network_manager.network["branch"].keys())
+
 
         # Five types of configurations for edge-oriented branch configuration.
         # self.action_space = spaces.Dict({x: spaces.Discrete(8) for x in self.branches})
@@ -137,6 +139,8 @@ class EdgeAgentBranchEnv(Env):
 
     def step(self, action):
 
+        action = {x: action[i] for i, x in enumerate(self.agents)}
+
         original_cost = self.network_manager.solution["objective"]
         saved_nm = copy.deepcopy(self.network_manager)
         new_cost = self.network_manager.solve_branch_configurations(action)
@@ -166,18 +170,18 @@ class EdgeAgentBranchEnv(Env):
         #     reward = 0
 
         # Dense reward.
-        # scale_factor = 1
-        # # reward = (self.last_cost - new_cost) / original_cost if feasible else 0
+        scale_factor = 100
         # reward = (self.last_cost - new_cost) / original_cost if feasible else 0
-        # reward *= scale_factor
+        reward = (self.last_cost - new_cost) / original_cost if feasible else 0
+        reward *= scale_factor
 
         # Binary reward.
-        if feasible and self.last_cost > (new_cost + 1e-5):
-            reward = 1
-        elif self.last_cost < new_cost or not feasible:
-            reward = -1
-        else:
-            reward = 0
+        # if feasible and self.last_cost > (new_cost + 1e-5):
+        #     reward = 1
+        # elif self.last_cost < new_cost or not feasible:
+        #     reward = -1
+        # else:
+        #     reward = 0
 
         # ----
         # Binary reward.

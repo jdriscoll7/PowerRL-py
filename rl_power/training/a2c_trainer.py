@@ -1,3 +1,4 @@
+import copy
 import itertools
 import math
 import os
@@ -6,6 +7,8 @@ from collections import defaultdict
 from itertools import count
 from random import random
 from typing import Tuple, Union, Dict
+import dill as pickle
+import uuid
 
 import numpy as np
 import torch
@@ -41,6 +44,7 @@ class A2CBranchTrainer:
         self.n_actions = n_actions
         self.batch_size = batch_size
         self.entropy_coeff = entropy_coeff
+        self.model_linear_dim = model_linear_dim
         self.env = training_env(env_sampling_config, max_actions=max_actions, n_agents=n_agents)
 
         self.memory = Memory(capacity=self.batch_size)
@@ -78,26 +82,25 @@ class A2CBranchTrainer:
         self.actor_weight_norm_history = []
         self.ppo_update_iterations = 4
         self.clip_ratio = 0.1
+        time_string = time.strftime("%Y%m%d%H%M%S") + uuid.uuid4().hex
+        self.save_directory = f"./results/{self.actor.__class__.__name__}_{time_string}/"
+
 
     def select_action(self, state: Dict[str, Tensor]):
         self.steps_done += 1
 
-        action_probs = {agent: torch.zeros(size=(len(branch_data), 4)) for agent, branch_data in state.items()}
-        action_dict = {agent: torch.zeros(size=(len(state[agent]),)) for agent, branch_data in state.items()}
-        dist = {agent: None for agent, branch_data in state.items()}
-
         # Execute actor/policy for all agents at once.
-        stacked_states = torch.stack([b_state for b_state in state.values()])
+        stacked_states = torch.cat([b_state for b_state in state.values()])
+        stacked_states = stacked_states.view(-1, *stacked_states.shape)
         stacked_action_probs = self.actor(stacked_states)
 
-        for i, (agent, branch_states) in enumerate(state.items()):
-            action_probs[agent] = stacked_action_probs[i]
-            dist[agent] = Categorical(action_probs[agent])
-            action_dict[agent] = dist[agent].sample()
+        dist = Categorical(stacked_action_probs)
+        sampled_action = dist.sample().view(-1)
+        # action_dict = {branch: sampled_action[i] for i, branch in enumerate(state.keys())}
 
         # action_vector = {b: int(policy_output[i].item()) for i, b in enumerate(branches)}
 
-        return dist, action_dict
+        return stacked_action_probs, sampled_action
 
     def train(self, n_iterations: int = 100):
 
@@ -121,9 +124,9 @@ class A2CBranchTrainer:
 
             for t in count():
 
-                distribution, action_dict = self.select_action(state)
+                distribution, action = self.select_action(state)
 
-                next_state, reward, terminated, truncated, _ = self.env.step(action_dict)
+                next_state, reward, terminated, truncated, _ = self.env.step(action)
 
                 # Convert next state from ndarray dict to tensor dict.
                 next_state = self.state_to_tensor(next_state, self.env)
@@ -131,6 +134,9 @@ class A2CBranchTrainer:
                 truncated = terminated
                 state_tensor = torch.cat(list(state.values()), dim=0)
                 next_state_tensor = torch.cat(list(next_state.values()), dim=0)
+
+                state_tensor = state_tensor.view(1, *state_tensor.shape)
+                next_state_tensor = next_state_tensor.view(1, *next_state_tensor.shape)
 
                 reward_list = [torch.tensor(r, dtype=torch.float32, device=self.device).unsqueeze(0)
                                for branch, r in reward.items()]
@@ -151,36 +157,22 @@ class A2CBranchTrainer:
                 #     td_target = reward_tensor + self.discount_rate * next_value.view(-1, 1) * (1 - terminated)
                 # # td_target = (td_target - td_target.mean()) / (td_target.std() + 1e-8)
 
-                log_prob_list = []
-                prob_list = []
-                for i, key in enumerate(list(distribution.keys())):
-                    log_prob_list.append(distribution[key].log_prob(action_dict[key]))
-                    prob_list.append(distribution[key].probs)
-                log_probs = torch.sum(torch.cat(log_prob_list, dim=0)).view(1)
-                probs = torch.cat(prob_list, dim=0)
-
-                action_tensor = torch.tensor(list(action_dict.values()), device=self.device)
-
-                self.memory.save(state_tensor, action_tensor, value, next_value,
-                                 log_probs, probs, reward_tensor.view(-1), terminated)
+                self.memory.save(state_tensor, action, value, next_value, distribution,
+                                 reward_tensor.view(-1), terminated)
 
                 if terminated and (i_episode + 1) % self.batch_size == 0:
-                    _states, _actions, _values, _next_values, _log_probs, _probs, _advantages, _episode_returns = self.memory.load()
+                    _states, _actions, _values, _next_values, _probs, _advantages, _episode_returns = self.memory.load()
 
                     # self.critic_update(_values, _episode_returns)
                     # self.actor_update(_probs, _log_probs, _advantages)
                     # self.memory.reset()
-                    old_probs = 1 * _probs
+                    old_probs = _probs
                     for ppo_update_idx in range(self.ppo_update_iterations):
                         self.critic_update(_values, _episode_returns)
-                        _values = 0*_values.detach()
-                        for _v_i in range(len(_values)):
-                            _values[_v_i] = self.critic(_states[_v_i])
-                        _advantages = (_episode_returns - _values).detach()
-                        self.actor_update(_probs, _log_probs, _advantages, _actions, old_probs)
-                        _probs = 0*_probs.detach()
-                        for _p_i in range(len(_values)):
-                            _probs[_p_i] = self.actor(_states[_p_i]).view(-1, self.n_actions)
+                        _values = self.critic(_states)
+                        # _advantages = (_episode_returns.view(-1, 1) - _values).detach()
+                        self.actor_update(_probs, _advantages, _actions, old_probs)
+                        _probs = self.actor(_states).view(*_probs.shape)
 
                     self.memory.reset()
 
@@ -195,14 +187,9 @@ class A2CBranchTrainer:
                     # plot_durations()
                     break
 
-        time_string = time.strftime("%Y%m%d%H%M%S")
-        save_directory = f"./pytorch_models/{self.actor.__class__.__name__}/"
-        if not os.path.exists(save_directory):
-            os.makedirs(f"{save_directory}")
-        torch.save(self.actor.state_dict(), f"{save_directory}a2c_actor_weights_{time_string}.pth")
-        torch.save(self.critic.state_dict(), f"{save_directory}a2c_critic_weights_{time_string}.pth")
+        self.save_model()
 
-    def actor_update(self, probs, log_probs, advantages, actions, old_probs=None):
+    def actor_update(self, probs, advantages, actions, old_probs=None):
 
         # stacked_probs = torch.cat(self.probs_batch, dim=0)
         # entropy = torch.sum(stacked_probs * stacked_probs.log(), dim=-1).mean()
@@ -222,14 +209,12 @@ class A2CBranchTrainer:
         surr1 = ratios * advantages.view(-1, 1)
         surr2 = torch.clamp(ratios, 1-self.clip_ratio, 1+self.clip_ratio) * advantages.view(-1, 1)
         # final loss of clipped objective PPO
-        actor_loss = -torch.min(surr1, surr2).mean()
+        actor_loss = -torch.min(surr1, surr2).mean() - self.entropy_coeff * m1.entropy().mean()
 
         self.actor_loss_history.append(actor_loss.item())
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
-        self.actor_weight_grad_norm_history.append(torch.norm(self.actor.layer_1.weight.grad))
-        self.actor_weight_norm_history.append(torch.norm(self.actor.layer_1.weight))
-        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 1)
+        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 10)
         self.actor_optimizer.step()
 
     def critic_update(self, values, target):
@@ -248,7 +233,7 @@ class A2CBranchTrainer:
         self.critic_loss_history.append(critic_loss.item())
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 1)
+        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 10)
         self.critic_optimizer.step()
 
     def evaluate(self, path: str, active_branches: list[str] = None, max_actions: int = 5):
@@ -327,8 +312,8 @@ class A2CBranchTrainer:
         plt_save_info = self.get_plot_string_info()
 
         n_plots = max_agents - min_agents + 1
-        fig_bar, axs_bar = plt.subplots(n_plots, 1, sharex=True)
-        fig_scatter, axs_scatter = plt.subplots(n_plots, 1, sharex=True)
+        fig_bar, axs_bar = plt.subplots(n_plots, 1, sharex=True, squeeze=False)
+        fig_scatter, axs_scatter = plt.subplots(n_plots, 1, sharex=True, squeeze=False)
 
         fig_bar.supxlabel("Test Case Rewards")
         fig_scatter.supxlabel("Test Case Rewards")
@@ -341,36 +326,36 @@ class A2CBranchTrainer:
             mean_val = np.mean(r)
 
             # Histogram plot.
-            axs_bar[i].hist(r, density=False)
-            axs_bar[i].scatter(mean_val, 0, marker='x', color='r')
+            axs_bar[i, 0].hist(r, density=False)
+            axs_bar[i, 0].scatter(mean_val, 0, marker='x', color='r')
 
             # Error bar plot.
             min_gap = abs(mean_val - min(r))
             max_gap = abs(mean_val - max(r))
-            axs_scatter[i].errorbar(mean_val, 0, xerr=[[min_gap], [max_gap]], fmt="o")
-            axs_scatter[i].get_yaxis().set_visible(False)
+            axs_scatter[i, 0].errorbar(mean_val, 0, xerr=[[min_gap], [max_gap]], fmt="o")
+            axs_scatter[i, 0].get_yaxis().set_visible(False)
 
         fig_bar.suptitle(f"Reward histograms: n_agents = {min_agents}-{max_agents} | {test_case}")
 
-        fig_bar.savefig(f"./figures/a2c_bar_plot_{plt_save_info}.png")
-        fig_scatter.savefig(f"./figures/a2c_eval_return_scatter_{plt_save_info}.png")
+        fig_bar.savefig(f"{self.save_directory}a2c_bar_plot_{plt_save_info}.png")
+        fig_scatter.savefig(f"{self.save_directory}a2c_eval_return_scatter_{plt_save_info}.png")
 
     def plot_history(self, additional_text: str = ""):
 
         plt_file_info = self.get_plot_string_info()
 
-        fig, axs = plt.subplots(3, 1, sharex=True)
-        axs[0].plot(self.reward_history)
-        axs[1].plot(np.convolve(self.reward_history, np.ones(100) / 100, mode='same'))
-        axs[2].plot(self.episode_length_history)
+        fig, axs = plt.subplots(3, 1, sharex=True, squeeze=False)
+        axs[0, 0].plot(self.reward_history)
+        axs[1, 0].plot(np.convolve(self.reward_history, np.ones(100) / 100, mode='same'))
+        axs[2, 0].plot(self.episode_length_history)
         fig.suptitle("Episode reward and length history")
         fig.supxlabel("Episode #")
-        axs[0].set_ylabel("Episode Reward")
-        axs[1].set_ylabel("Averaged Episode Reward")
-        axs[2].set_ylabel("Episode Duration")
+        axs[0, 0].set_ylabel("Episode Reward")
+        axs[1, 0].set_ylabel("Averaged Episode Reward")
+        axs[2, 0].set_ylabel("Episode Duration")
 
         file_name = "a2c_reward_duration_train_plot_" + plt_file_info + ".png"
-        fig.savefig("./figures/" + file_name)
+        fig.savefig(f"{self.save_directory}{file_name}")
 
         fig, axs = plt.subplots(2, 1)
         axs[0].plot(self.actor_loss_history)
@@ -381,8 +366,26 @@ class A2CBranchTrainer:
         axs[1].set_ylabel("Critic Loss")
 
         file_name = "a2c_actor_critic_loss_plot_" + plt_file_info + ".png"
-        fig.savefig("./figures/" + file_name)
+        fig.savefig(f"{self.save_directory} {file_name}")
         # plt.show()
+
+    def save_model(self):
+
+        if not os.path.exists(self.save_directory):
+            os.makedirs(f"{self.save_directory}")
+        torch.save(self.actor, f"{self.save_directory}a2c_actor.pth")
+        torch.save(self.critic, f"{self.save_directory}a2c_critic.pth")
+
+        save_string = ""
+        for attribute in [a for a in dir(self) if not a.startswith('__')]:
+            save_string += f"{attribute}: {getattr(self, attribute)}\n\n"
+
+        with open(f"{self.save_directory}params.txt", "w") as text_file:
+            text_file.write(save_string)
+
+        # Picking - lazy but possibly effective.
+        with open(f"{self.save_directory}trainer.pkl", "wb") as f:
+            pickle.dump(self, f)
 
     def load_latest_model(self):
 

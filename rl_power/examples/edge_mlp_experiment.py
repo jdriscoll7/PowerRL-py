@@ -11,10 +11,9 @@ from torch import nn
 import torch.nn.functional as F
 
 
-
 if __name__ == '__main__':
     # variance = lambda t: 0.01
-    variance = lambda t: 0.0
+    variance = lambda t: 0.1
     # variance = lambda t: t/50e3
     sampler_options = {"paths": [os.path.abspath("ieee_data/WB5.m"),
                                  os.path.abspath("ieee_data/pglib_opf_case14_ieee.m"),
@@ -23,7 +22,7 @@ if __name__ == '__main__':
                        # "weights": [3, 1, 0.33, 0.11],
                        # "weights": [0, 0, 1, 0],
                        # "weights": [0, 0, 1, 0],
-                       "weights": [0, 0, 1, 0],
+                       "weights": [1, 1, 1, 1],
                        "gen_cost_mean_var": [0, variance],
                        "load_mean_var": [0, variance],
                        }
@@ -33,6 +32,10 @@ if __name__ == '__main__':
     load_from_memory = False
     max_actions = 5
     n_train_agents = 3
+    lr = 1e-4
+    batch_size = 16
+    model_linear_dim = 512
+    n_actions = 5
 
     print(f"LSTM = {use_lstm}")
     trainer = A2CBranchTrainer(env_sampling_config=sampler_options,
@@ -40,21 +43,21 @@ if __name__ == '__main__':
                                # critic_type=MLPCritic,
                                actor_type=MLPCombinedActor,
                                critic_type=MLPCombinedCritic,
-                               n_actions=5,
+                               n_actions=n_actions,
                                training_env=SampledEdgeEnv,
-                               model_linear_dim=256,
+                               model_linear_dim=model_linear_dim,
                                max_actions=max_actions,
                                n_agents=n_train_agents,
                                device="cuda:0",
-                               batch_size=128,
+                               batch_size=batch_size,
                                entropy_coeff=0,
-                               lr=1e-3)
+                               lr=lr)
 
     if load_from_memory:
         trainer.load_latest_model()
         results = None
     else:
-        results = trainer.train(50000)
+        results = trainer.train(50_000)
 
     test_case = "ieee_data/WB5.m"
     trainer.agent_count_evaluation_sweep(test_case=test_case, min_agents=1, max_agents=3, max_actions=max_actions, limit=100)

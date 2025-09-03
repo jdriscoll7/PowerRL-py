@@ -5,11 +5,19 @@ import copy
 
 # from julia import Julia
 # Julia(init_julia=False)
-from juliacall import Main, DictValue, VectorValue
+from juliacall import Main, DictValue, VectorValue, Pkg
 
 from rl_power.power.graph_utils import get_adjacent_branches
 
-Main.include("./rl_power/power/pm_functions.jl")
+try:
+    Main.include("./rl_power/power/pm_functions.jl")
+except Exception as e:
+    Pkg.add("PowerModels")
+    Pkg.add("Ipopt")
+    Pkg.add("JuMP")
+    Pkg.add("JSON")
+    Pkg.add("Memento")
+    Main.include("./rl_power/power/pm_functions.jl")
 
 
 def action_binary_map(action: int):
@@ -215,14 +223,11 @@ class ConfigurationManager:
 
         # In both cases, store an extra network that is used as reconfigured version of main network.
         self.configured_network = copy.deepcopy(network)
-
         # Load base configuration that will be used later.
         self.configuration = Configuration(self.network, contains_busbars=contains_busbars)
-
         # Store solutions for base network and configured network.
         self.solution = solve_opf(self.network)
         self.config_solution = solve_opf(self.configured_network)
-
         self.branch_state_length = len(self.get_branch_state("1"))
 
     def get_branch_state(self, branch: str):

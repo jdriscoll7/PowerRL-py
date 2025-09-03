@@ -140,6 +140,9 @@ class PMSolutionRenderer:
         cost = nm_copy.config_solution["objective"]
         self.axes.set_title(f"Cost: {cost}")
 
+    def get_fig(self):
+        return self.fig
+
 
 if __name__ == "__main__":
 

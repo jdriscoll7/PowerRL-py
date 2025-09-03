@@ -9,14 +9,12 @@ import gymnasium as gym
 from gymnasium import spaces
 import networkx as nx
 import random
-from ray.rllib.env import MultiAgentEnv
-from tensorflow.python.autograph.pyct.templates import replace
 
 from rl_power.power.drawing import PMSolutionRenderer
 from rl_power.power.powermodels_interface import Configuration, load_test_case, ConfigurationManager
 
 
-class RLLibBranchEnvBase(MultiAgentEnv):
+class RLLibBranchEnvBase():
 
     def __init__(self, render_mode: str = None, path: str = None, network: dict = None, groups: list[list[int]] = None,
                  max_actions: int = 10, active_branches: list[str] = None, n_agents: int = 3):

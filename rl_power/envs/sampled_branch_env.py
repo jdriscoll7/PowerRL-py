@@ -1,8 +1,6 @@
 import random
 from typing import Any, Dict, Union
 
-from ray.rllib import MultiAgentEnv
-
 from rl_power.envs.rllib_multi_branch_env import RLLibBranchEnv
 
 
@@ -40,7 +38,7 @@ class EnvSampler:
         return env
 
 
-class SampledBranchEnv(MultiAgentEnv):
+class SampledBranchEnv():
 
     def __init__(self, env_sampling_config: dict, max_actions: Union[int, list] = 10, n_agents: int = 2):
         super().__init__()
