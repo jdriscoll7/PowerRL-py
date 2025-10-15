@@ -3,12 +3,11 @@ from typing import Tuple, Callable
 
 import torch
 from gymnasium import spaces
-from stable_baselines3 import PPO, A2C
+from stable_baselines3 import A2C
 from stable_baselines3.common.policies import ActorCriticPolicy
 from torch import nn
-from gymnasium.spaces import Space
 
-from rl_power.envs.grouped_branch_env import GroupedBranchEnv
+from rl_power.envs.old.grouped_branch_env import GroupedBranchEnv
 
 
 class Transpose(nn.Module):

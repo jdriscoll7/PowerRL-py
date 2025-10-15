@@ -1,22 +1,18 @@
 import itertools
-import math
 import os
 import time
-from collections import defaultdict
 from itertools import count
-from random import random
-from typing import Tuple, Union, Dict
+from typing import Union, Dict
 
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
-from torch import tensor, nn, optim, Tensor
+from torch import nn, optim, Tensor
 import torch.nn.functional as F
 from torch.distributions import Categorical
 
-from rl_power.envs.rllib_multi_branch_env import RLLibBranchEnv
-from rl_power.envs.sampled_branch_env import SampledBranchEnv
-from rl_power.envs.time_varying_branch_env import NetworkValueController, TVBranchEnv
+from rl_power.envs.old.rllib_multi_branch_env import RLLibBranchEnv
+from rl_power.envs.old.time_varying_branch_env import TVBranchEnv
 from rl_power.modules.bus_attention_model import BusAttentionActor, BusAttentionCritic
 
 

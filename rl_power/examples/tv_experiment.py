@@ -1,6 +1,6 @@
 import os
 
-from rl_power.envs.time_varying_branch_env import NetworkValueController, TVBranchEnv
+from rl_power.envs.old.time_varying_branch_env import NetworkValueController, TVBranchEnv
 from rl_power.examples.bus_mlp_experiment import MLPActor, MLPCritic
 from rl_power.training.a2c_tv_trainer import A2CTVBranchTrainer
 

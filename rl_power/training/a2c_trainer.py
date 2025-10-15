@@ -1,27 +1,20 @@
-import copy
 import itertools
-import math
 import os
 import time
-from collections import defaultdict
 from itertools import count
-from random import random
-from typing import Tuple, Union, Dict
+from typing import Union, Dict
 import dill as pickle
 import uuid
 
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
-from torch import tensor, nn, optim, Tensor
-import torch.nn.functional as F
+from torch import optim, Tensor
 from torch.distributions import Categorical
 
-from rl_power.envs.branch_env import BranchEnv
 from rl_power.envs.edge_agent_branch_env import EdgeAgentBranchEnv
-from rl_power.envs.node_agent_branch_env import NodeEnvSampler, SampledNodeEnv, NodeAgentBranchEnv
-from rl_power.envs.rllib_multi_branch_env import RLLibBranchEnv
-from rl_power.envs.sampled_branch_env import SampledBranchEnv
+from rl_power.envs.old.node_agent_branch_env import SampledNodeEnv
+from rl_power.envs.old.rllib_multi_branch_env import RLLibBranchEnv
 from rl_power.modules.bus_attention_model import BusAttentionActor, BusAttentionCritic
 from rl_power.power.graph_utils import get_adjacent_branches
 from rl_power.training.memory import Memory
@@ -85,7 +78,6 @@ class A2CBranchTrainer:
         time_string = time.strftime("%Y%m%d%H%M%S") + uuid.uuid4().hex
         self.save_directory = f"./results/{self.actor.__class__.__name__}_{time_string}/"
 
-
     def select_action(self, state: Dict[str, Tensor]):
         self.steps_done += 1
 
@@ -127,7 +119,6 @@ class A2CBranchTrainer:
                 distribution, action = self.select_action(state)
 
                 next_state, reward, terminated, truncated, _ = self.env.step(action)
-
                 # Convert next state from ndarray dict to tensor dict.
                 next_state = self.state_to_tensor(next_state, self.env)
 
@@ -159,6 +150,9 @@ class A2CBranchTrainer:
 
                 self.memory.save(state_tensor, action, value, next_value, distribution,
                                  reward_tensor.view(-1), terminated)
+
+                self.env.set_random_agents()
+
 
                 if terminated and (i_episode + 1) % self.batch_size == 0:
                     _states, _actions, _values, _next_values, _probs, _advantages, _episode_returns = self.memory.load()

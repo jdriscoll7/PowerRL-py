@@ -1,5 +1,7 @@
 import os
 
+from rl_power.power.readable_actions import action_branch_data_to_readable
+
 os.environ.setdefault("MPLBACKEND", "Agg")
 from concurrent.futures import ProcessPoolExecutor, TimeoutError as _Timeout
 import multiprocessing as mp
@@ -50,11 +52,17 @@ def _build_tester_worker(net_bytes: bytes, model_dir: str):
 
 
 def list_networks():
-    path = "./ieee_data/"
+    path = "./ieee_data_demo/"
+    return [file for file in os.listdir(path)]
+
+
+def list_models():
+    path = "./results/"
     return [file for file in os.listdir(path)]
 
 
 def load_network(net_path):
+    from rl_power.power.graph_utils import get_adjacent_branches
     print(f"loading {net_path}")
     abs_path = os.path.abspath("ieee_data/" + net_path)
     net_bytes = run_in_proc(_load_test_case_worker, abs_path, timeout_s=60)
@@ -62,14 +70,15 @@ def load_network(net_path):
     # _network = load_test_case(os.path.abspath("ieee_data/" + "pglib_opf_case118_ieee.m"))
     buses = list(_network["bus"].keys())
     n_buses = len(buses)
-    # valid_buses = [b for b in buses if len(get_adjacent_branches(_network, b)[0]) > 2]
-    valid_buses = buses
+    valid_buses = [str(int(b) - 1) for b in buses if len(get_adjacent_branches(_network, [b])[0]) > 2]
+    # valid_buses = buses
 
     return _network, gr.Dropdown(choices=valid_buses, interactive=True)
 
 
 def load_selectable_edges(_network, node_id):
     from rl_power.power.graph_utils import get_adjacent_branches
+    node_id = str(int(node_id) + 1)
     return gr.Dropdown(choices=get_adjacent_branches(_network, [node_id])[0], interactive=True, multiselect=True)
 
 
@@ -78,7 +87,7 @@ def _reset_tester_worker():
     _TESTER.env.reset()
 
 
-def reset_tester(tester):
+def reset_tester():
     run_in_proc(_reset_tester_worker, timeout_s=60)
 
 
@@ -91,36 +100,40 @@ def load_tester(_net_selection, _model_directory_selection):
     else:
         # tester = A2CBranchTester(_net_selection, _model_directory_selection)
         net_bytes = dill.dumps(_net_selection)  # send to worker
-        run_in_proc(_build_tester_worker, net_bytes, _model_directory_selection, timeout_s=60)
+        run_in_proc(_build_tester_worker, net_bytes, os.path.abspath("./results/" + _model_directory_selection), timeout_s=6000)
 
     print("tester loaded")
 
 
 def _policy_run_to_frame_worker(edge_selection):
     global _TESTER
-    _TESTER.test_step(agents=edge_selection)
-    buf = BytesIO()
-    _TESTER.current_fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
+    dist, action = _TESTER.test_step(agents=edge_selection)
+    buf_now = BytesIO()
+    buf_start = BytesIO()
+    _TESTER.current_fig.savefig(buf_now, format="png", dpi=150, bbox_inches="tight")
+    _TESTER.start_fig.savefig(buf_start, format="png", dpi=150, bbox_inches="tight")
     plt.close('all')
-    return buf.getvalue()
+    return buf_now.getvalue(), buf_start.getvalue(), dill.dumps(dist.detach().cpu().numpy()), dill.dumps(action)
 
 
 def policy_run_to_frame(edge_selection):
-
-    png_bytes = run_in_proc(_policy_run_to_frame_worker, edge_selection)
-    im = Image.open(BytesIO(png_bytes)).convert("RGBA")
-    return im
+    png_bytes_now, png_bytes_start, dist_bytes, action_bytes = run_in_proc(_policy_run_to_frame_worker, edge_selection)
+    fig_now = Image.open(BytesIO(png_bytes_now)).convert("RGBA")
+    fig_start = Image.open(BytesIO(png_bytes_start)).convert("RGBA")
+    dist = dill.loads(dist_bytes)
+    action = dill.loads(action_bytes)
+    dist = np.array2string(dist[0], precision=2, separator=", ")
+    print(dist)
+    return fig_now, fig_start, str(dist), str(action)
 
 
 def append_frame(frames, idx, edge_selection):
     """Append a new frame to the list and move index to the newest frame."""
     # Build a new frame from current selections
-    print(edge_selection)
-    fig = policy_run_to_frame(edge_selection)
-    print(fig)
+    fig, fig_start, dist, action = policy_run_to_frame(edge_selection)
     frames = (frames or []) + [fig]
     idx = len(frames) - 1  # jump to newest
-    return frames, idx, frames[idx]
+    return frames, idx, frames[idx], fig_start, dist, action
 
 
 def show_index(frames, idx):
@@ -151,14 +164,15 @@ if __name__ == "__main__":
         network = gr.State(value=None)
         frames_state = gr.State(value=[])
         idx_state = gr.State(value=0)
-        # tester_state = gr.State(value=None)
 
         with gr.Row():
             with gr.Column(scale=1):
-                model_input = gr.FileExplorer(root_dir="./results", label="Pick model file", height=200,
-                                              file_count='single')
-                net_input = gr.Dropdown(list_networks(), label="Network", value=None)
+                model_input = gr.Dropdown(list_models(), label="Choose Policy", value=None)
+                net_input = gr.Dropdown(list_networks(), label="Choose Network", value=None)
                 run_btn = gr.Button("Run policy", variant="primary")
+                model_action = gr.Textbox(label="Policy Action Probabilities", value="", interactive=False, lines=5)
+                model_output = gr.Textbox(label="Action", value="", interactive=False, lines=5)
+                network_start_plot = gr.Image(label="Initial Network", type="pil")
 
             with gr.Column(scale=2):
                 node_selector = gr.Dropdown(label="Node", allow_custom_value=True)
@@ -168,20 +182,22 @@ if __name__ == "__main__":
                     idx_display = gr.Number(label="Frame index", value=0, precision=0, interactive=True, scale=1)
                     next_btn = gr.Button("Next ⟶", scale=1)
 
-                frame_plot = gr.Image(label="Frame", type="pil")
+                frame_plot = gr.Image(label="Output Network", type="pil")
 
         # When the network changes, update the info panel (no slider involved)
         input_event = net_input.change(fn=load_network, inputs=net_input, outputs=[network, node_selector])
         # Changes related to tester object.
         model_event = model_input.change(fn=load_tester, inputs=[network, model_input], outputs=None)
         input_event.then(fn=load_tester, inputs=[network, model_input], outputs=None)
+        # input_event.then(fn=reset_tester, inputs=None, outputs=None)
 
-        node_selector.change(fn=load_selectable_edges, inputs=[network, node_selector], outputs=edge_selector)
+        node_selector_event = node_selector.change(fn=load_selectable_edges, inputs=[network, node_selector], outputs=edge_selector)
+        # node_selector_event.then(fn=reset_tester, inputs=None, outputs=None)
         edge_selector.change(fn=reset_tester, inputs=None, outputs=None)
 
         run_btn.click(fn=append_frame,
                       inputs=[frames_state, idx_state, edge_selector],
-                      outputs=[frames_state, idx_state, frame_plot]
+                      outputs=[frames_state, idx_state, frame_plot, network_start_plot, model_action, model_output]
                       ).then(lambda i: i, inputs=[idx_state], outputs=[idx_display])
 
         idx_display.change(fn=show_index,
@@ -204,5 +220,5 @@ if __name__ == "__main__":
     # dummy = A2CBranchTester(test_env_path=__network, actor_critic_directory=None)
     # solve_opf(__network)
     # plt.close('all')
-    demo.launch(show_error=True, debug=True, max_threads=1)
+    demo.launch(show_error=True, debug=True, max_threads=1, share=True)
     # demo.launch(debug=True, max_threads=1)

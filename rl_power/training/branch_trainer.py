@@ -2,23 +2,18 @@ import math
 import os
 import itertools
 import time
-from collections import namedtuple, deque
 
 import numpy as np
 import torch
 from torch import optim, Tensor, nn
 from matplotlib import pyplot as plt
-from torch.backends.cudnn import deterministic
 
-from rl_power.envs.branch_env import BranchEnv
-from rl_power.envs.rllib_multi_branch_env import RLLibBranchEnv
+from rl_power.envs.old.rllib_multi_branch_env import RLLibBranchEnv
 from rl_power.envs.sampled_branch_env import SampledBranchEnv
 from rl_power.modules.branch_policy_model import DefaultNetwork
-from rl_power.training.power_eval import run_policy_on_branch_env
 from rl_power.training.replay_buffer import LSTMTransition, Transition, ReplayMemory
-from rl_power.visualization.visualization import plot_training_curve
 import random
-from typing import Dict, Any, Union
+from typing import Dict, Union
 from itertools import count
 
 

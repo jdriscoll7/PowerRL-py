@@ -1,7 +1,7 @@
 import random
 from typing import Any, Dict, Union
 
-from rl_power.envs.rllib_multi_branch_env import RLLibBranchEnv
+from rl_power.envs.old.rllib_multi_branch_env import RLLibBranchEnv
 
 
 class EnvSampler:

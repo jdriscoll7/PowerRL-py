@@ -1,31 +1,16 @@
 import copy
-import itertools
-import math
 import os
-import time
-from collections import defaultdict
-from itertools import count
-from random import random
-from typing import Tuple, Union, Dict
-import dill as pickle
-import uuid
+from typing import Union, Dict
 
 import numpy as np
 import torch
-from matplotlib import pyplot as plt
-from torch import tensor, nn, optim, Tensor
-import torch.nn.functional as F
+from torch import Tensor
 from torch.distributions import Categorical
 
-from rl_power.envs.branch_env import BranchEnv
 from rl_power.envs.edge_agent_branch_env import EdgeAgentBranchEnv
-from rl_power.envs.node_agent_branch_env import NodeEnvSampler, SampledNodeEnv, NodeAgentBranchEnv
-from rl_power.envs.rllib_multi_branch_env import RLLibBranchEnv
-from rl_power.envs.sampled_branch_env import SampledBranchEnv
-from rl_power.modules.bus_attention_model import BusAttentionActor, BusAttentionCritic
+from rl_power.envs.old.node_agent_branch_env import SampledNodeEnv
 from rl_power.power.drawing import PMSolutionRenderer
-from rl_power.power.graph_utils import get_adjacent_branches
-from rl_power.training.memory import Memory
+from rl_power.power.readable_actions import action_branch_data_to_readable
 
 
 class A2CBranchTester:
@@ -36,6 +21,8 @@ class A2CBranchTester:
                                       max_actions=1000,
                                       n_agents=n_agents,
                                       agents=["1"])
+
+        self.initial_cost = self.env.network_manager.solution["objective"]
 
         self.device = device
         # Get the number of state observations
@@ -51,10 +38,17 @@ class A2CBranchTester:
 
         self.actor = None
         self.critic = None
-        self.renderer = PMSolutionRenderer()
+        self.start_renderer = PMSolutionRenderer()
+        self.start_renderer.update_frame(self.env.network_manager)
+        # plt.show()
+        self.start_fig = self.start_renderer.get_fig()
 
+        self.renderer = PMSolutionRenderer(layout=copy.deepcopy(self.start_renderer.layout))
+        # self.renderer = PMSolutionRenderer()
         self.renderer.update_frame(self.env.network_manager)
         self.current_fig = self.renderer.get_fig()
+        # self.start_fig = self.current_fig
+        # plt.show()
 
         if actor_critic_directory is not None:
             self.load_models(actor_critic_directory)
@@ -84,9 +78,9 @@ class A2CBranchTester:
 
         distribution, action = self.select_action(state)
 
-        next_state, reward, terminated, truncated, _ = self.env.step(action)
+        next_state, reward, terminated, truncated, info = self.env.step(action)
 
-        self.renderer.update_frame(self.env.network_manager)
+        self.renderer.update_frame(self.env.network_manager, f"| Initial cost: {self.initial_cost:.2f}")
         self.current_fig = self.renderer.get_fig()
 
         # Convert next state from ndarray dict to tensor dict.
@@ -110,6 +104,16 @@ class A2CBranchTester:
 
         value = self.critic(state_tensor)
         next_value = self.critic(next_state_tensor)
+
+        n_buses = len(self.env.network_manager.network["bus"].keys())
+        action_string = ""
+        for i, _branch in enumerate(self.env.agents):
+            action_string += action_branch_data_to_readable(action[i],
+                                                            self.env.network_manager.configured_network["branch"][_branch],
+                                                            n_buses=n_buses//2) + "\n"
+        action_string += f"{info['termination_status']}\n"
+
+        return distribution, action_string
 
     def load_models(self, path):
 

@@ -31,30 +31,36 @@ def _pm_get_edge_and_id_list(network: dict):
     return bus_ids_and_edges, load_ids_and_edges, gen_ids_and_edges
 
 
-def pm_to_igraph(network: dict, solution: dict) -> ig.Graph:
+def pm_to_igraph(network: dict, solution: dict, show_loads_gens: bool = False) -> ig.Graph:
 
     network = recursive_dict_cast(network)
     n_bus = len(network["bus"])
 
     (branch_ids, edges), (load_ids, load_edges), (gen_ids, gen_edges) = _pm_get_edge_and_id_list(network)
 
-    graph = ig.Graph(edges + load_edges + gen_edges)
+    if show_loads_gens:
+        graph = ig.Graph(edges + load_edges + gen_edges)
+    else:
+        graph = ig.Graph(edges)
 
     # Bus, loads, generators.
     vertex_labels = [f"b{i}" for i in range(n_bus // 2)]
     vertex_labels += [f"bb{i}" for i in range(n_bus // 2)]
-    vertex_labels += [f"ld{i}" for i in range(len(load_ids))]
-    vertex_labels += [f"g{i}" for i in range(len(gen_ids))]
+    if show_loads_gens:
+        vertex_labels += [f"ld{i}" for i in range(len(load_ids))]
+        vertex_labels += [f"g{i}" for i in range(len(gen_ids))]
     graph.vs["label"] = vertex_labels
 
     vertex_sizes = [20 for i in range(n_bus)]
-    vertex_sizes += [20 for i in range(len(load_ids))]
-    vertex_sizes += [20 for i in range(len(gen_ids))]
+    if show_loads_gens:
+        vertex_sizes += [20 for i in range(len(load_ids))]
+        vertex_sizes += [20 for i in range(len(gen_ids))]
     graph.vs["size"] = vertex_sizes
 
     vertex_shapes = ["circle" for i in range(n_bus)]
-    vertex_shapes += ["square" for i in range(len(load_ids))]
-    vertex_shapes += ["diamond" for i in range(len(gen_ids))]
+    if show_loads_gens:
+        vertex_shapes += ["square" for i in range(len(load_ids))]
+        vertex_shapes += ["diamond" for i in range(len(gen_ids))]
     graph.vs["shape"] = vertex_shapes
 
     branch_solutions_dicts = [{} if b not in dict(solution["solution"]["branch"]) else dict(solution["solution"]["branch"][b])
@@ -74,8 +80,9 @@ def pm_to_igraph(network: dict, solution: dict) -> ig.Graph:
 
     cmap1 = LinearSegmentedColormap.from_list("vertex_cmap", ["red", "blue"])
     cmap2 = LinearSegmentedColormap.from_list("edge_cmap", ["red", "blue"])
-    cmap3 = LinearSegmentedColormap.from_list("load_cmap", ["red", "blue"])
-    cmap4 = LinearSegmentedColormap.from_list("gen_cmap", ["red", "blue"])
+    if show_loads_gens:
+        cmap3 = LinearSegmentedColormap.from_list("load_cmap", ["red", "blue"])
+        cmap4 = LinearSegmentedColormap.from_list("gen_cmap", ["red", "blue"])
 
     bus_vm_list = ig.rescale([solution["solution"]["bus"][str(b + 1)]["vm"] for b in range(len(graph.vs[:n_bus]))], clamp=True)
     branch_pt_list = ig.rescale([0 if str(b) not in solution["solution"]["branch"] else solution["solution"]["branch"][str(b)]["pt"]
@@ -85,13 +92,15 @@ def pm_to_igraph(network: dict, solution: dict) -> ig.Graph:
     gen_power_list = ig.rescale(gen_powers, clamp=True)
 
     vertex_colors = [cmap1(v) for v in bus_vm_list]
-    vertex_colors += ["green" for load in load_ids]
-    vertex_colors += [cmap4(g) for g in gen_power_list]
+    if show_loads_gens:
+        vertex_colors += ["green" for load in load_ids]
+        vertex_colors += [cmap4(g) for g in gen_power_list]
     graph.vs['color'] = vertex_colors
 
     edge_colors = [cmap2(p) for p in branch_pt_list]
-    edge_colors += ["black" for load in load_ids]
-    edge_colors += ["black" for load in gen_ids]
+    if show_loads_gens:
+        edge_colors += ["black" for load in load_ids]
+        edge_colors += ["black" for load in gen_ids]
 
     graph.es['color'] = edge_colors
 
@@ -111,34 +120,49 @@ def draw_pm_igraph(graph: ig.Graph, layout: ig.layout, target_ax=None) -> None:
 
     # plt.show()
 
+
+def remove_isolated_bb(_network: ig.Graph):
+
+    isolated_vertices = [v.index for v in _network.vs if v.degree() == 0 and "bb" in v["label"]]
+    _network.delete_vertices(isolated_vertices)
+
+    return _network
+
+
 def draw_pm_configuration(nm: ConfigurationManager, target_ax=None, layout=None):
 
     # unconfigured_graph = pm_to_igraph(nm.network, nm.solution)
     configured_graph = pm_to_igraph(nm.configured_network, nm.config_solution)
-
+    print(configured_graph)
+    print(list(configured_graph.vs))
+    print(list(configured_graph.es))
+    # Delete isolated vertices.
+    configured_graph = remove_isolated_bb(configured_graph)
     draw_pm_igraph(graph=configured_graph, layout=layout, target_ax=target_ax)
 
     return layout
 
 
+
+
 class PMSolutionRenderer:
-    def __init__(self):
-        self.layout = None
+    def __init__(self, layout = None):
+        self.layout = layout
         self.fig, self.axes = plt.subplots()
 
-    def update_frame(self, nm: ConfigurationManager):
+    def update_frame(self, nm: ConfigurationManager, additional_title_text: str = ""):
 
         nm_copy = copy.deepcopy(nm)
 
         if self.layout is None:
-            unconfigured_graph = pm_to_igraph(nm_copy.network, nm_copy.solution)
+            unconfigured_graph = pm_to_igraph(nm_copy.network, nm_copy.solution, show_loads_gens=True)
             self.layout = unconfigured_graph.layout(layout="fr")
 
         self.axes.cla()
 
         draw_pm_configuration(nm=nm_copy, layout=self.layout, target_ax=self.axes)
         cost = nm_copy.config_solution["objective"]
-        self.axes.set_title(f"Cost: {cost}")
+        self.axes.set_title(f"Cost: {cost:.2f} {additional_title_text}")
 
     def get_fig(self):
         return self.fig

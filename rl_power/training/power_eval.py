@@ -1,4 +1,4 @@
-from rl_power.envs.branch_env import BranchEnv
+from rl_power.envs.old.branch_env import BranchEnv
 from ray.rllib.algorithms.algorithm import Algorithm
 import matplotlib.pyplot as plt
 

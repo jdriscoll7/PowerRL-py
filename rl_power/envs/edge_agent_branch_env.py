@@ -1,17 +1,16 @@
 import copy
 import os
-from collections import defaultdict
-from typing import Dict, Any, List, Union
+from typing import Dict, Any, Union
 
 import numpy as np
 from gymnasium import spaces, Env
 import networkx as nx
 import random
 
-from rl_power.envs.time_varying_branch_env import NetworkValueController
+from rl_power.envs.old.time_varying_branch_env import NetworkValueController
 from rl_power.power.drawing import PMSolutionRenderer
 from rl_power.power.graph_utils import get_adjacent_branches, powermodel_dict_to_graph
-from rl_power.power.powermodels_interface import Configuration, load_test_case, ConfigurationManager, solve_opf
+from rl_power.power.powermodels_interface import load_test_case, ConfigurationManager, solve_opf
 
 
 class EdgeAgentBranchEnv(Env):
@@ -145,16 +144,20 @@ class EdgeAgentBranchEnv(Env):
         saved_nm = copy.deepcopy(self.network_manager)
         new_cost = self.network_manager.solve_branch_configurations(action)
 
-        termination_status = str(self.network_manager.config_solution['termination_status']).lower()
+        termination_status = str(self.network_manager.config_solution['primal_status']).lower()
 
-        feasible = ("infeasible" not in termination_status
-                    and "iteration_limit" not in termination_status
-                    and 'numerical' not in termination_status)
+        # feasible = ("infeasible" not in termination_status
+        #             and "iteration_limit" not in termination_status
+        #             and 'numerical' not in termination_status)
+        feasible = ("feasible" in termination_status) and ("infeasible" not in termination_status)
+        # print(termination_status + "__" + str(self.network_manager.config_solution['termination_status']).lower())
 
         newly_feasible = not self.last_feasible and feasible
         newly_infeasible = self.last_feasible and not feasible
 
         self.last_feasible = feasible
+
+        info = {'termination_status': str(self.network_manager.config_solution['primal_status']).lower()}
 
         if not feasible:
             self.network_manager = saved_nm
@@ -196,7 +199,7 @@ class EdgeAgentBranchEnv(Env):
         self.last_improvement *= 100
 
         self.last_action = action
-        observation, info = self.get_observation(), self.get_info()
+        observation = self.get_observation()
 
         rewards = {x: reward for x in self.agents}
         self.last_reward = reward
@@ -320,6 +323,11 @@ class SampledEdgeEnv(Env):
 
     def get_info(self):
         return self.env.get_info()
+
+    def set_random_agents(self):
+        new_agents = self.sampler.agent_sampler(self.env)
+        self.agents = new_agents
+        self.env.set_active_agents(new_agents)
 
 
 if __name__ == "__main__":

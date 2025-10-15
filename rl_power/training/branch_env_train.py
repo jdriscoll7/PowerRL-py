@@ -6,7 +6,7 @@ from ray import air
 from ray import tune
 import os
 
-from rl_power.envs.branch_env import BranchEnv
+from rl_power.envs.old.branch_env import BranchEnv
 from rl_power.training.power_eval import run_policy_on_branch_env
 from rl_power.visualization.visualization import plot_training_curve
 

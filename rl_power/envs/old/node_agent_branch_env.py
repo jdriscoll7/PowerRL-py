@@ -1,17 +1,17 @@
 import copy
 import os
 from collections import defaultdict
-from typing import Dict, Any, List, Union
+from typing import Dict, Any, Union
 
 import numpy as np
 from gymnasium import spaces, Env
 import networkx as nx
 import random
 
-from rl_power.envs.time_varying_branch_env import NetworkValueController
+from rl_power.envs.old.time_varying_branch_env import NetworkValueController
 from rl_power.power.drawing import PMSolutionRenderer
 from rl_power.power.graph_utils import get_adjacent_branches, powermodel_dict_to_graph
-from rl_power.power.powermodels_interface import Configuration, load_test_case, ConfigurationManager, solve_opf
+from rl_power.power.powermodels_interface import load_test_case, ConfigurationManager, solve_opf
 
 
 class NodeAgentBranchEnv(Env):
